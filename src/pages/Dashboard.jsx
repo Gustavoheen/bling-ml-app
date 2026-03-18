@@ -39,8 +39,18 @@ function categorizarSituacao(situacao) {
   return 'Pendente'
 }
 
+function extrairTotal(p) {
+  // Bling v3 pode retornar o valor em diferentes campos dependendo do endpoint
+  const v = p.total?.totalVenda ?? p.totalVenda ?? p.valor ?? p.valorTotal ?? p.total ?? 0
+  const n = Number(v)
+  return isNaN(n) ? 0 : n
+}
+
 function calcularMetricas(pedidosRaw) {
   const pedidos = Array.isArray(pedidosRaw) ? pedidosRaw : []
+  if (pedidos.length > 0) {
+    console.log('[Dashboard] estrutura pedido[0]:', JSON.stringify(pedidos[0], null, 2))
+  }
   let receita = 0
   let custo = 0
   const statusCount = { Pendente: 0, Processando: 0, Enviado: 0, Entregue: 0, Cancelado: 0, Devolvido: 0 }
@@ -48,7 +58,7 @@ function calcularMetricas(pedidosRaw) {
   const porDia = {}
 
   for (const p of pedidos) {
-    const total = Number(p.total?.totalVenda ?? p.totalVenda ?? 0)
+    const total = extrairTotal(p)
     const status = categorizarSituacao(p.situacao)
     if (statusCount[status] !== undefined) statusCount[status]++
 
