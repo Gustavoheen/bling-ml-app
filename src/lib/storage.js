@@ -2,8 +2,28 @@
 const STORAGE_KEY = 'bml_clientes'
 const CLIENTE_ATIVO_KEY = 'bml_cliente_ativo'
 
+const CLIENTES_PADRAO = [
+  { id: 'cliente_casa_comercio', nome: 'Casa e Comércio' },
+]
+
+function novoCliente(id, nome) {
+  return {
+    id, nome,
+    criadoEm: new Date().toISOString(),
+    bling: { accessToken: null, refreshToken: null, expiresAt: null },
+    ml:    { accessToken: null, refreshToken: null, expiresAt: null },
+  }
+}
+
 export function getClientes() {
-  try { return JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]') }
+  try {
+    const lista = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]')
+    if (lista.length > 0) return lista
+    // Seed clientes padrão na primeira vez
+    const padrao = CLIENTES_PADRAO.map(c => novoCliente(c.id, c.nome))
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(padrao))
+    return padrao
+  }
   catch { return [] }
 }
 
