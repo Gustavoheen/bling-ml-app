@@ -29,7 +29,7 @@ function iso30DiasAtras() {
 function categorizarSituacao(situacao) {
   if (!situacao) return 'Pendente'
   const id = situacao?.id ?? situacao
-  const nome = (situacao?.nome || situacao?.valor || '').toLowerCase()
+  const nome = String(situacao?.nome?.valor || situacao?.nome || situacao?.valor || '').toLowerCase()
   if (id === 9 || nome.includes('atendido')) return 'Entregue'
   if (id === 12 || nome.includes('cancel')) return 'Cancelado'
   if (id === 15 || nome.includes('andamento')) return 'Processando'
