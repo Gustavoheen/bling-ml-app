@@ -64,18 +64,38 @@ export async function getProdutos(token, pagina = 1) {
 }
 
 export async function getTodosProdutos(token, onProgress) {
+  // 1ª passagem: lista básica de todos os IDs
   let pagina = 1
-  let todos = []
+  let resumos = []
   while (true) {
     const data = await getProdutos(token, pagina)
     const itens = data?.data || []
-    todos = [...todos, ...itens]
-    if (onProgress) onProgress(todos.length)
+    resumos = [...resumos, ...itens]
+    if (onProgress) onProgress(resumos.length)
     if (itens.length < 100) break
     pagina++
-    await new Promise(r => setTimeout(r, 300)) // rate limit
+    await new Promise(r => setTimeout(r, 300))
   }
-  return todos
+
+  // 2ª passagem: detalhe completo de cada produto (em lotes de 5)
+  const completos = []
+  for (let i = 0; i < resumos.length; i += 5) {
+    const lote = resumos.slice(i, i + 5)
+    const detalhes = await Promise.allSettled(
+      lote.map(p => getProdutoDetalhe(token, p.id))
+    )
+    detalhes.forEach((r, idx) => {
+      if (r.status === 'fulfilled') {
+        const det = r.value?.data || r.value
+        completos.push({ ...lote[idx], ...det })
+      } else {
+        completos.push(lote[idx])
+      }
+    })
+    if (onProgress) onProgress(completos.length)
+    await new Promise(r => setTimeout(r, 200))
+  }
+  return completos
 }
 
 export async function getProdutoDetalhe(token, id) {
