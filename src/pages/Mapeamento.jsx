@@ -383,7 +383,7 @@ export default function Mapeamento() {
       const categsExistentes = await listarCategorias(blingToken)
       for (const cat of categsExistentes) {
         try { await deletarCategoria(blingToken, cat.id) } catch {}
-        await new Promise(r => setTimeout(r, 150))
+        await new Promise(r => setTimeout(r, 80))
       }
       setReorganizLog(l => [...l, { status: 'ok', msg: `${categsExistentes.length} categorias antigas deletadas` }])
     } catch (e) {
@@ -411,17 +411,12 @@ export default function Mapeamento() {
         // Cria categoria no Bling com campos personalizados ML
         const catId = await buscarOuCriarCategoria(blingToken, tipo, attrs)
 
-        // Salva mapeamento por produto
+        // Salva mapeamento por produto (no localStorage — não precisa chamar Bling por produto)
         for (const prod of prods) {
           catProdutos[prod.id] = {
             mlCategoryId: melhor.category_id,
             mlCategoryName: melhor.domain_name || melhor.category_name,
             atributos: attrs.map(a => ({ id: a.id, name: a.name, valor: autoFillAtributo(a, prod) })),
-          }
-          // Atualiza produto no Bling com a nova categoria
-          if (catId) {
-            try { await atualizarProduto(blingToken, prod.id, { categoria: { id: catId } }) } catch {}
-            await new Promise(r => setTimeout(r, 120))
           }
         }
         salvarCategoriasProdutos(cliente.id, catProdutos)
@@ -442,7 +437,7 @@ export default function Mapeamento() {
       } catch (err) {
         setReorganizLog(l => l.map((i, idx) => idx === l.length - 1 ? { ...i, status: 'erro', msg: err.message } : i))
       }
-      await new Promise(r => setTimeout(r, 500))
+      await new Promise(r => setTimeout(r, 300))
     }
 
     setReorganizando(false)
