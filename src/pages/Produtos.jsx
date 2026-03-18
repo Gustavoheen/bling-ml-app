@@ -1,8 +1,8 @@
 import { useState, useMemo } from 'react'
-import { getClienteAtivo, getProdutos, salvarProdutos, atualizarTokensBling, atualizarTokensML, getMapeamentos, salvarMapeamentos, salvarVinculo, getVinculo, adicionarHistorico, getCategoriasML } from '../lib/storage'
+import { getClienteAtivo, getProdutos, salvarProdutos, atualizarTokensBling, atualizarTokensML, getMapeamentos, salvarMapeamentos, salvarVinculo, getVinculo, adicionarHistorico, getCategoriasML, getCategoriasProdutos } from '../lib/storage'
 import { getTodosProdutos, atualizarProduto, criarProduto, buscarOuCriarCategoria, refreshToken as blingRefresh } from '../lib/bling'
 import { buscarCategorias, getAtributosCategoria, publicarProduto, atualizarProduto as atualizarProdutoML, blingParaMLPayload, refreshToken as mlRefresh } from '../lib/ml'
-import { RefreshCw, Search, Package, Plus, Edit2, X, Save, AlertCircle, CheckCircle, Loader, Image, Tag, Truck, FileText, Layers } from 'lucide-react'
+import { RefreshCw, Search, Package, Plus, Edit2, X, Save, AlertCircle, CheckCircle, Loader, Image, Tag, Upload, FileText, Layers } from 'lucide-react'
 
 async function getTokenValido(cliente) {
   if (!cliente?.bling?.accessToken) throw new Error('Bling não conectado.')
@@ -73,20 +73,23 @@ export default function Produtos() {
   // Auto-preenche atributos ML obrigatórios com dados do produto Bling
   function autoPreencherAtributos(attrs, produto) {
     const vals = {}
-    const nome  = (produto?.nome  || '').toLowerCase()
     const marca = (produto?.marca || '')
     const gtin  = (produto?.gtin  || '')
     const codigo = (produto?.codigo || '')
     for (const a of attrs) {
-      const id  = a.id?.toLowerCase()
+      const id  = (a.id || '').toLowerCase()
       const nm  = (a.name || '').toLowerCase()
       if (!vals[a.id]) {
-        if (id === 'brand' || nm.includes('marca') || nm === 'brand')        vals[a.id] = marca
-        else if (id === 'gtin' || nm === 'gtin' || nm === 'ean')             vals[a.id] = gtin
-        else if (id === 'sku'  || nm === 'sku'  || nm === 'código')          vals[a.id] = codigo
-        else if (nm.includes('model') || nm.includes('modelo'))              vals[a.id] = produto?.codigo || ''
-        else if (nm.includes('cor')   || nm.includes('color'))               vals[a.id] = ''
-        else                                                                  vals[a.id] = ''
+        if (id === 'brand' || nm.includes('marca') || nm === 'brand')                      vals[a.id] = marca
+        else if (id === 'gtin' || nm === 'gtin' || nm === 'ean')                           vals[a.id] = gtin
+        else if (id === 'sku'  || nm === 'sku'  || nm === 'código')                        vals[a.id] = codigo
+        else if (nm.includes('model') || nm.includes('modelo'))                            vals[a.id] = codigo
+        else if (nm.includes('altura'))                                                    vals[a.id] = produto?.altura ? String(produto.altura) : ''
+        else if (nm.includes('largura'))                                                   vals[a.id] = produto?.largura ? String(produto.largura) : ''
+        else if (nm.includes('profundidade') || nm.includes('comprimento'))               vals[a.id] = produto?.profundidade ? String(produto.profundidade) : ''
+        else if (nm.includes('peso'))                                                      vals[a.id] = produto?.pesoLiquido ? String(produto.pesoLiquido) : (produto?.peso ? String(produto.peso) : '')
+        else if (nm.includes('cor') || nm.includes('color'))                              vals[a.id] = ''
+        else                                                                               vals[a.id] = ''
       }
     }
     return vals
@@ -158,16 +161,24 @@ export default function Produtos() {
       percentualIpi: produto.tributacao?.percentualIpi || '',
       codigoEnquadramentoIpi: produto.tributacao?.codigoEnquadramentoIpi || '',
     })
-    setModal({ produto, isNovo: false })
+    setModal({ produto: {
+      ...produto,
+      imagens: Array.isArray(produto.imagens) ? produto.imagens : [],
+      caracteristicas: Array.isArray(produto.caracteristicas) ? produto.caracteristicas : [],
+      fornecedores: Array.isArray(produto.fornecedores) ? produto.fornecedores : [],
+      depositos: Array.isArray(produto.depositos) ? produto.depositos : [],
+      variacoes: Array.isArray(produto.variacoes) ? produto.variacoes : [],
+    }, isNovo: false })
     setErroModal('')
     setSucessoModal(false)
 
-    // 1. Tenta mapeamento salvo pela categoria do produto
+    // 1. Tenta mapeamento por produto primeiro (produtos sem categoria no Bling)
+    const catProdutos = getCategoriasProdutos(cliente?.id || '')
     const cat = produto.categoria?.nome || 'Sem categoria'
     const mapArr = getMapeamentos(cliente?.id || '')
     const mapObj = {}
     for (const i of (Array.isArray(mapArr) ? mapArr : [])) mapObj[i.categoriaBling] = i
-    let mapaAtual = mapObj[cat]
+    let mapaAtual = catProdutos[produto.id] || mapObj[cat]
 
     // 2. Se não encontrou, tenta auto-detectar pelo nome/categoria do produto
     //    usando as categorias ML validadas cadastradas pelo usuário

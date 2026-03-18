@@ -1,15 +1,15 @@
 import { useState, useMemo, useCallback } from 'react'
 import {
-  getClienteAtivo, getProdutos, getMapeamentos,
+  getClienteAtivo, getProdutos, getMapeamentos, getCategoriasProdutos,
   atualizarTokensML, adicionarHistorico, salvarProdutos,
   salvarMapeamentos, atualizarTokensBling
 } from '../lib/storage'
 import { publicarProduto, blingParaMLPayload, refreshToken as mlRefresh } from '../lib/ml'
-import { atualizarProduto, refreshToken as blingRefresh } from '../lib/bling'
+import { atualizarProduto, getProdutoDetalhe, normalizarProduto, refreshToken as blingRefresh } from '../lib/bling'
 import {
   Upload, CheckCircle, XCircle, Clock, AlertCircle,
   Search, ChevronDown, ChevronUp, Save, Settings,
-  Wrench, ArrowRight, Loader
+  Wrench, ArrowRight, Loader, Play
 } from 'lucide-react'
 
 // ─── tokens ──────────────────────────────────────────────
@@ -35,7 +35,7 @@ async function getBlingToken(cliente) {
 // ─── validação ───────────────────────────────────────────
 const PROBLEMAS_DEF = [
   { id: 'preco',      label: 'Preço inválido',        check: p => !p.preco || Number(p.preco) <= 0 },
-  { id: 'descricao',  label: 'Sem descrição',          check: p => !p.descricaoCurta?.trim() },
+  { id: 'descricao',  label: 'Sem descrição',          check: p => !p.descricaoCurta?.trim() && !p.descricaoComplementar?.trim() && !p.nome?.trim() },
   { id: 'imagem',     label: 'Sem imagem',             check: p => !p.imagemURL },
   { id: 'categoria',  label: 'Categoria não mapeada',  check: (p, m) => !m },
   { id: 'atributos',  label: 'Atributos incompletos',  check: (p, m) => m && (m.atributos||[]).some(a=>!a.valor?.trim()) },
@@ -85,6 +85,7 @@ export default function Exportacao() {
     for (const i of (Array.isArray(mapsArr) ? mapsArr : [])) m[i.categoriaBling] = i
     return m
   })
+  const categoriasProdutos = getCategoriasProdutos(cliente?.id || '')
 
   // config exportação
   const [config, setConfig] = useState(() => { try { return JSON.parse(localStorage.getItem('bml_export_config') || '{}') } catch { return {} } })
@@ -94,18 +95,24 @@ export default function Exportacao() {
   // enriquece produtos com análise
   const produtosAnalisados = useMemo(() => produtos.map(p => {
     const cat = p.categoria?.nome || 'Sem categoria'
-    const mapa = mapeamentos[cat]
+    // Usa mapeamento por produto primeiro (para produtos sem categoria no Bling)
+    const mapa = categoriasProdutos[p.id] || mapeamentos[cat]
     const problemas = getProblemas(p, mapa)
     return { ...p, _cat: cat, _mapa: mapa, _problemas: problemas, _ok: problemas.length === 0 }
-  }), [produtos, mapeamentos])
+  }), [produtos, mapeamentos, categoriasProdutos])
 
   const prontos     = produtosAnalisados.filter(p => p._ok)
   const comProblema = produtosAnalisados.filter(p => !p._ok)
+
+  // modo de exportação: 'bling' = atualiza produto no Bling (integração nativa), 'ml' = API ML direta
+  const [modoExport, setModoExport] = useState('bling')
 
   // estado exportação
   const [resultados,   setResultados]   = useState({}) // id → {status,mlId,errosML}
   const [exportando,   setExportando]   = useState(false)
   const [selecionados, setSelecionados] = useState(new Set())
+  const [logAuto,      setLogAuto]      = useState([])
+  const [sucessosAuto, setSucessosAuto] = useState(0)
 
   // estado correção
   const [aba,        setAba]        = useState('prontos')
@@ -123,34 +130,159 @@ export default function Exportacao() {
     return listaAtual.filter(p => p.nome?.toLowerCase().includes(q) || p.codigo?.toLowerCase().includes(q))
   }, [listaAtual, busca])
 
-  // ── exportar ──────────────────────────────────────────
-  async function exportarLista(lista) {
-    if (!lista.length) return
-    setExportando(true)
-    let token
-    try { token = await getMLToken(getClienteAtivo()) }
-    catch (e) { alert(e.message); setExportando(false); return }
-
+  // ── exportar via Bling ────────────────────────────────
+  // Atualiza o produto no Bling com categoria + características ML.
+  // A integração nativa Bling↔ML sincroniza automaticamente.
+  async function exportarListaViaBling(lista, blingToken) {
     for (const produto of lista) {
       setResultados(r => ({ ...r, [produto.id]: { status: 'enviando' } }))
       try {
-        const payload = blingParaMLPayload(produto, produto._mapa.mlCategoryId, produto._mapa.atributos || [], config)
-        const resp = await publicarProduto(token, payload)
+        const mapa = produto._mapa
+        const fixProduto = fixes[produto.id] || {}
+
+        // Monta características mesclando as existentes com os atributos ML
+        const existentes = Array.isArray(produto.caracteristicas) ? produto.caracteristicas : []
+        const existentesMap = {}
+        for (const c of existentes) existentesMap[(c.descricao || '').toLowerCase()] = c
+        for (const a of (mapa.atributos || [])) {
+          const key = (a.name || '').toLowerCase()
+          const valor = fixProduto[`attr_${a.id}`] ?? a.valor ?? ''
+          if (valor) existentesMap[key] = { descricao: a.name, valor }
+        }
+
+        const dados = {
+          preco: parseFloat(fixProduto.preco || produto.preco) || produto.preco,
+          descricaoCurta: fixProduto.descricaoCurta || produto.descricaoCurta || undefined,
+          caracteristicas: Object.values(existentesMap).filter(c => c.valor),
+          ...(produto.categoria?.id ? { categoria: { id: produto.categoria.id } } : {}),
+        }
+
+        await atualizarProduto(blingToken, produto.id, dados)
+        setResultados(r => ({ ...r, [produto.id]: { status: 'ok' } }))
+        adicionarHistorico(cliente.id, { tipo: 'publicar', produtoId: produto.id, produtoNome: produto.nome, status: 'ok', via: 'bling' })
+      } catch (e) {
+        setResultados(r => ({ ...r, [produto.id]: { status: 'erro', msg: e.message, errosML: [] } }))
+        adicionarHistorico(cliente.id, { tipo: 'publicar', produtoId: produto.id, produtoNome: produto.nome, status: 'erro', erro: e.message })
+      }
+      await new Promise(r => setTimeout(r, 400))
+    }
+  }
+
+  // ── exportar via API ML direta ─────────────────────────
+  async function exportarListaViaML(lista, mlToken, blingToken) {
+    for (const produto of lista) {
+      setResultados(r => ({ ...r, [produto.id]: { status: 'enviando' } }))
+      try {
+        // Busca dados completos do Bling (imagens, descrição, etc.)
+        let produtoCompleto = produto
+        if (blingToken) {
+          try {
+            const detalhe = await getProdutoDetalhe(blingToken, produto.id)
+            produtoCompleto = { ...normalizarProduto(detalhe), _mapa: produto._mapa, _cat: produto._cat, _problemas: produto._problemas, _ok: produto._ok }
+          } catch { /* usa dados locais se falhar */ }
+        }
+
+        const payload = blingParaMLPayload(produtoCompleto, produtoCompleto._mapa.mlCategoryId, produtoCompleto._mapa.atributos || [], config)
+        const resp = await publicarProduto(mlToken, payload)
         setResultados(r => ({ ...r, [produto.id]: { status: 'ok', mlId: resp.id } }))
-        adicionarHistorico(cliente.id, { tipo:'publicar', produtoId:produto.id, produtoNome:produto.nome, mlId:resp.id, status:'ok' })
+        adicionarHistorico(cliente.id, { tipo: 'publicar', produtoId: produto.id, produtoNome: produto.nome, mlId: resp.id, status: 'ok', via: 'ml' })
       } catch (e) {
         const errosML = parsearErroML(e.message)
         setResultados(r => ({ ...r, [produto.id]: { status: 'erro', msg: e.message, errosML } }))
-        adicionarHistorico(cliente.id, { tipo:'publicar', produtoId:produto.id, produtoNome:produto.nome, status:'erro', erro:e.message })
-        // Reflete erro no fix state para correção rápida
+        adicionarHistorico(cliente.id, { tipo: 'publicar', produtoId: produto.id, produtoNome: produto.nome, status: 'erro', erro: e.message })
         const fixErros = {}
         errosML.forEach(er => { fixErros[er.campo] = fixes[produto.id]?.[er.campo] || '' })
-        setFixes(f => ({ ...f, [produto.id]: { ...(f[produto.id]||{}), ...fixErros } }))
+        setFixes(f => ({ ...f, [produto.id]: { ...(f[produto.id] || {}), ...fixErros } }))
       }
-      await new Promise(r => setTimeout(r, 500))
+      await new Promise(r => setTimeout(r, 600))
     }
+  }
+
+  // ── testar publicação automática (tenta todos até 10 ok) ──
+  async function testarPublicacaoAuto() {
+    if (exportando) return
+    setExportando(true)
+    setLogAuto([])
+    setSucessosAuto(0)
+
+    const log = (msg, tipo = 'info') => setLogAuto(l => [...l, { msg, tipo, ts: new Date().toLocaleTimeString() }])
+
+    try {
+      const c = getClienteAtivo()
+      const mlToken = await getMLToken(c)
+      const blingToken = c?.bling?.accessToken ? await getBlingToken(c) : null
+
+      // Ordena: com imagem primeiro, depois por preço > 0
+      const candidatos = [...produtosAnalisados].filter(p => p._mapa).sort((a, b) => {
+        const aScore = (a.imagemURL ? 2 : 0) + (a.preco > 0 ? 1 : 0)
+        const bScore = (b.imagemURL ? 2 : 0) + (b.preco > 0 ? 1 : 0)
+        return bScore - aScore
+      })
+
+      if (!candidatos.length) { log('Nenhum produto com categoria mapeada encontrado.', 'erro'); setExportando(false); return }
+
+      log(`Iniciando teste com ${candidatos.length} produtos (meta: 10 publicações bem-sucedidas)`)
+      let sucessos = 0
+
+      for (const produto of candidatos) {
+        if (sucessos >= 10) break
+        log(`Tentando: ${produto.nome.slice(0, 60)}...`)
+        setResultados(r => ({ ...r, [produto.id]: { status: 'enviando' } }))
+
+        try {
+          let produtoCompleto = produto
+          if (blingToken) {
+            try {
+              const detalhe = await getProdutoDetalhe(blingToken, produto.id)
+              produtoCompleto = { ...normalizarProduto(detalhe), _mapa: produto._mapa }
+            } catch {}
+          }
+
+          const payload = blingParaMLPayload(produtoCompleto, produtoCompleto._mapa.mlCategoryId, produtoCompleto._mapa.atributos || [], config)
+          const resp = await publicarProduto(mlToken, payload)
+          sucessos++
+          setSucessosAuto(sucessos)
+          setResultados(r => ({ ...r, [produto.id]: { status: 'ok', mlId: resp.id } }))
+          adicionarHistorico(c.id, { tipo: 'publicar', produtoId: produto.id, produtoNome: produto.nome, mlId: resp.id, status: 'ok', via: 'ml-auto' })
+          log(`✓ Sucesso ${sucessos}/10 → ML ID: ${resp.id}`, 'ok')
+        } catch (e) {
+          const errosML = parsearErroML(e.message)
+          setResultados(r => ({ ...r, [produto.id]: { status: 'erro', msg: e.message, errosML } }))
+          log(`✗ Erro: ${e.message}`, 'erro')
+        }
+
+        await new Promise(r => setTimeout(r, 800))
+      }
+
+      if (sucessos >= 10) log(`Meta atingida! ${sucessos} produtos publicados com sucesso.`, 'ok')
+      else log(`Concluído. ${sucessos} de ${candidatos.length} produtos publicados.`, sucessos > 0 ? 'ok' : 'erro')
+    } catch (e) {
+      log(`Erro fatal: ${e.message}`, 'erro')
+    }
+
     setExportando(false)
-    // Produtos com erro vão para aba problemas
+  }
+
+  // ── exportar (roteador) ────────────────────────────────
+  async function exportarLista(lista) {
+    if (!lista.length) return
+    setExportando(true)
+
+    try {
+      const c = getClienteAtivo()
+      if (modoExport === 'bling') {
+        if (!c?.bling?.accessToken) throw new Error('Bling não conectado.')
+        await exportarListaViaBling(lista, c.bling.accessToken)
+      } else {
+        const mlToken = await getMLToken(c)
+        const blingToken = c?.bling?.accessToken ? await getBlingToken(c) : null
+        await exportarListaViaML(lista, mlToken, blingToken)
+      }
+    } catch (e) {
+      alert(e.message)
+    }
+
+    setExportando(false)
     const temErro = lista.some(p => resultados[p.id]?.status === 'erro')
     if (temErro) setAba('problemas')
   }
@@ -247,7 +379,10 @@ export default function Exportacao() {
 
         {uniqueProblemas.includes('categoria') && (
           <div style={{ background: 'rgba(99,179,237,0.08)', border: '1px solid rgba(99,179,237,0.3)', borderRadius: 8, padding: '10px 14px', marginBottom: 12, fontSize: 13, color: '#3182CE' }}>
-            ℹ Categoria "{produto._cat}" não mapeada — vá em <strong>Mapeamento</strong> e use "Auto-mapear tudo".
+            {produto._cat.toLowerCase() === 'sem categoria'
+              ? <>ℹ Este produto não tem categoria no Bling. Vá em <strong>Mapeamento</strong>, clique em <strong>"Sem categoria"</strong> e pesquise o tipo do produto (ex: "Cadeiras", "Sofás").</>
+              : <>ℹ Categoria "{produto._cat}" não mapeada — vá em <strong>Mapeamento</strong> e use "Auto-mapear tudo".</>
+            }
           </div>
         )}
 
@@ -313,7 +448,23 @@ export default function Exportacao() {
             <span style={{ color: comProblema.length > 0 ? '#FC8181' : '#718096', fontWeight: comProblema.length > 0 ? 700 : 400 }}>{comProblema.length} com problema</span>
           </p>
         </div>
-        <div style={{ display: 'flex', gap: 10 }}>
+        <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+          {/* Seletor de modo */}
+          <div style={{ background: '#F7FAFC', border: '1.5px solid #E2E8F0', borderRadius: 8, padding: '4px', display: 'flex', gap: 2 }}>
+            <button onClick={() => setModoExport('bling')}
+              style={{ padding: '6px 12px', borderRadius: 6, border: 'none', fontSize: 12, fontWeight: 700, background: modoExport === 'bling' ? '#1A202C' : 'none', color: modoExport === 'bling' ? '#fff' : '#718096', cursor: 'pointer' }}>
+              via Bling
+            </button>
+            <button onClick={() => setModoExport('ml')}
+              style={{ padding: '6px 12px', borderRadius: 6, border: 'none', fontSize: 12, fontWeight: 700, background: modoExport === 'ml' ? '#1A202C' : 'none', color: modoExport === 'ml' ? '#fff' : '#718096', cursor: 'pointer' }}>
+              via API ML
+            </button>
+          </div>
+          <button onClick={testarPublicacaoAuto} disabled={exportando}
+            style={{ display: 'flex', alignItems: 'center', gap: 7, background: exportando ? '#CBD5E0' : '#805AD5', color: '#fff', border: 'none', borderRadius: 8, padding: '10px 16px', fontSize: 13, fontWeight: 800 }}>
+            <Play size={13} />
+            {exportando ? 'Testando...' : 'Auto-testar (meta: 10)'}
+          </button>
           {prontos.length > 0 && (
             <button onClick={publicarTudo} disabled={exportando}
               style={{ display: 'flex', alignItems: 'center', gap: 8, background: exportando ? '#CBD5E0' : '#48BB78', color: '#fff', border: 'none', borderRadius: 8, padding: '10px 20px', fontSize: 13, fontWeight: 800 }}>
@@ -323,6 +474,23 @@ export default function Exportacao() {
           )}
         </div>
       </div>
+
+      {/* Log auto-teste */}
+      {logAuto.length > 0 && (
+        <div style={{ background: '#1A202C', borderRadius: 12, padding: 16, marginBottom: 16, maxHeight: 220, overflowY: 'auto' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+            <span style={{ fontSize: 12, fontWeight: 800, color: '#A0AEC0' }}>LOG AUTO-TESTE</span>
+            <span style={{ fontSize: 13, fontWeight: 800, color: sucessosAuto >= 10 ? '#48BB78' : '#63B3ED' }}>
+              {sucessosAuto}/10 publicados
+            </span>
+          </div>
+          {logAuto.map((l, i) => (
+            <p key={i} style={{ fontSize: 11, fontFamily: 'monospace', color: l.tipo === 'ok' ? '#68D391' : l.tipo === 'erro' ? '#FC8181' : '#CBD5E0', marginBottom: 3 }}>
+              [{l.ts}] {l.msg}
+            </p>
+          ))}
+        </div>
+      )}
 
       {/* Resultados */}
       {(okCount > 0 || errCount > 0) && (

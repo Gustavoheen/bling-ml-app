@@ -224,18 +224,103 @@ export async function criarProduto(token, dados) {
   })
 }
 
+// Lista canais de venda conectados ao Bling (ML, Shopee, etc.)
+export async function getCanais(token) {
+  return blingFetch('/canais', token)
+}
+
+// Publica produto em marketplace via integração nativa do Bling
+export async function publicarViaBling(token, produtoId, canalId, mlCategoryId, atributos, preco, quantidade) {
+  return blingFetch('/anuncios', token, {
+    method: 'POST',
+    body: JSON.stringify({
+      produto: { id: produtoId },
+      canal: { id: canalId },
+      preco,
+      quantidade,
+      categoria: { codigo: String(mlCategoryId) },
+      atributos: (atributos || []).filter(a => a.valor).map(a => ({ id: a.id, valor: a.valor })),
+    }),
+  })
+}
+
+// Busca anúncio existente no Bling para um produto
+export async function getAnunciosBling(token, produtoId) {
+  return blingFetch(`/anuncios?produto=${produtoId}`, token)
+}
+
+// Lista campos personalizados disponíveis no Bling
+export async function getCamposPersonalizados(token) {
+  try {
+    const data = await blingFetch('/campos-personalizados?limit=100', token)
+    return data?.data || []
+  } catch { return [] }
+}
+
+// Cria campo personalizado no Bling se não existir, retorna o ID
+async function buscarOuCriarCampo(token, nome, camposExistentes) {
+  const existente = camposExistentes.find(c => c.nome?.toLowerCase() === nome.toLowerCase())
+  if (existente) return existente.id
+  try {
+    const resp = await blingFetch('/campos-personalizados', token, {
+      method: 'POST',
+      body: JSON.stringify({ nome, tipo: 'texto' }),
+    })
+    return resp?.data?.id || null
+  } catch { return null }
+}
+
+// Lista todas as categorias do Bling
+export async function listarCategorias(token) {
+  try {
+    const data = await blingFetch('/categorias/produtos?limit=100', token)
+    return data?.data || []
+  } catch { return [] }
+}
+
+// Deleta uma categoria do Bling por ID
+export async function deletarCategoria(token, id) {
+  return blingFetch(`/categorias/produtos/${id}`, token, { method: 'DELETE', body: JSON.stringify({}) })
+}
+
 // Busca categoria Bling por nome, cria se não existir
-export async function buscarOuCriarCategoria(token, nome) {
+// atributosML: lista de { name } com os atributos exigidos pelo marketplace
+export async function buscarOuCriarCategoria(token, nome, atributosML = []) {
+  let categoriaId = null
   try {
     const data = await blingFetch('/categorias/produtos?limit=100', token)
     const lista = data?.data || []
     const existente = lista.find(c => c.descricao?.toLowerCase() === nome.toLowerCase())
-    if (existente) return existente.id
+    if (existente) categoriaId = existente.id
   } catch {}
-  // Cria nova categoria
-  const resp = await blingFetch('/categorias/produtos', token, {
-    method: 'POST',
-    body: JSON.stringify({ descricao: nome }),
-  })
-  return resp?.data?.id || null
+
+  if (!categoriaId) {
+    // Cria nova categoria
+    const resp = await blingFetch('/categorias/produtos', token, {
+      method: 'POST',
+      body: JSON.stringify({ descricao: nome }),
+    })
+    categoriaId = resp?.data?.id || null
+  }
+
+  // Vincula campos personalizados (atributos ML) na categoria
+  if (categoriaId && atributosML.length > 0) {
+    try {
+      const camposExistentes = await getCamposPersonalizados(token)
+      const ids = []
+      for (const attr of atributosML) {
+        if (!attr.name) continue
+        const id = await buscarOuCriarCampo(token, attr.name, camposExistentes)
+        if (id) ids.push({ id })
+      }
+      if (ids.length > 0) {
+        await blingFetch(`/categorias/produtos/${categoriaId}`, token, {
+          method: 'PUT',
+          body: JSON.stringify({ descricao: nome, camposPersonalizados: ids }),
+        })
+      }
+    } catch {}
+  }
+
+  return categoriaId
 }

@@ -136,3 +136,14 @@ export function getCategoriasML(clienteId) {
 export function salvarCategoriasML(clienteId, lista) {
   localStorage.setItem(`bml_categorias_ml_${clienteId}`, JSON.stringify(lista))
 }
+
+// Mapeamento por produto (para produtos sem categoria no Bling)
+// { [produtoId]: { mlCategoryId, mlCategoryName, atributos: [] } }
+export function getCategoriasProdutos(clienteId) {
+  try { return JSON.parse(localStorage.getItem(`bml_cat_produto_${clienteId}`) || '{}') }
+  catch { return {} }
+}
+
+export function salvarCategoriasProdutos(clienteId, mapa) {
+  localStorage.setItem(`bml_cat_produto_${clienteId}`, JSON.stringify(mapa))
+}

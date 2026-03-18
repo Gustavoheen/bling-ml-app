@@ -1,9 +1,60 @@
 import { useState, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { getClienteAtivo, getProdutos, getMapeamentos, salvarMapeamentos } from '../lib/storage'
+import { getClienteAtivo, getProdutos, getMapeamentos, salvarMapeamentos, getCategoriasProdutos, salvarCategoriasProdutos, atualizarTokensBling } from '../lib/storage'
 import { buscarCategorias, getAtributosCategoria } from '../lib/ml'
-import { buscarOuCriarCategoria } from '../lib/bling'
-import { Search, CheckCircle, Circle, ChevronDown, ChevronUp, GitMerge, ArrowRight, Loader, Zap, RefreshCw } from 'lucide-react'
+import { buscarOuCriarCategoria, atualizarProduto, refreshToken as blingRefresh, listarCategorias, deletarCategoria } from '../lib/bling'
+import { Search, CheckCircle, Circle, ChevronDown, ChevronUp, GitMerge, ArrowRight, Loader, Zap, RefreshCw, Wand2 } from 'lucide-react'
+
+function extrairTipoProduto(nome) {
+  const encerrar = new Set([
+    'aço','ferro','madeira','tecido','couro','inox','mdf','vidro','plástico','plastico',
+    'estrutura','base','suporte','estilo','luxo','premium','moderno','moderna',
+    'clássico','classico','retrátil','retratil','reclinável','reclinavel',
+    'marrom','preto','preta','branco','branca','cinza','bege','creme','dourado','prata','natural','grafite','caramelo','verde','azul','vermelho','rose','nude',
+  ])
+  const pularInicio = new Set(['kit','com','de','em','e','para','ao','da','do','das','dos','um','uma','por','sem','conjunto','novo','nova'])
+  const conectivos = new Set(['de','da','do','das','dos'])
+  // Lugares/cômodos que formam parte do tipo (ex: "de Jantar", "de Escritório")
+  const comodos = new Set(['jantar','sala','escritório','escritorio','cozinha','quarto','banheiro','varanda','jardim','lavabo','corredor','entrada','centro','parede','teto','chão','chao'])
+
+  const palavras = nome.toLowerCase().split(/\s+/)
+  let resultado = []
+  let i = 0
+
+  // Pula ruído do início
+  while (i < palavras.length) {
+    const p = palavras[i].replace(/[^a-záéíóúâêîôûãõç]/gi, '')
+    if (!p || /^\d+$/.test(p) || pularInicio.has(p) || encerrar.has(p)) { i++; continue }
+    break
+  }
+
+  // Coleta tipo do produto (máximo 3 tokens significativos)
+  let tokens = 0
+  while (i < palavras.length && tokens < 3) {
+    const p = palavras[i].replace(/[^a-záéíóúâêîôûãõç]/gi, '')
+    if (!p) { i++; continue }
+    if (/^\d+$/.test(p)) break
+    if (encerrar.has(p)) break
+
+    // Conectivo só é incluído se liga a cômodo/lugar
+    if (conectivos.has(p)) {
+      const prox = palavras[i + 1]?.replace(/[^a-záéíóúâêîôûãõç]/gi, '')
+      if (!prox || !comodos.has(prox)) break
+      resultado.push(p)
+      i++; continue
+    }
+
+    resultado.push(p)
+    tokens++
+    i++
+  }
+
+  // Remove conectivos finais
+  while (resultado.length && conectivos.has(resultado[resultado.length - 1])) resultado.pop()
+  if (!resultado.length) return null
+
+  return resultado.map((w, idx) => (!conectivos.has(w) || idx === 0) ? w.charAt(0).toUpperCase() + w.slice(1) : w).join(' ')
+}
 
 function agruparPorCategoria(produtos) {
   const mapa = {}
@@ -57,11 +108,39 @@ export default function Mapeamento() {
     }
   }
 
+  function autoFillAtributo(attr, produto) {
+    if (!produto) return ''
+    const id = (attr.id || '').toLowerCase()
+    const nm = (attr.name || '').toLowerCase()
+
+    // 1. Verifica características já cadastradas no Bling
+    if (Array.isArray(produto.caracteristicas)) {
+      const carac = produto.caracteristicas.find(c => {
+        const desc = (c.descricao || '').toLowerCase()
+        return desc === nm || desc.includes(nm) || nm.includes(desc)
+      })
+      if (carac?.valor) return String(carac.valor)
+    }
+
+    // 2. Campos padrão do Bling
+    if (id === 'brand' || nm.includes('marca'))                             return produto.marca || ''
+    if (id === 'gtin' || nm === 'gtin' || nm === 'ean')                    return produto.gtin || ''
+    if (id === 'sku' || nm === 'sku' || nm.includes('código'))             return produto.codigo || ''
+    if (nm.includes('model') || nm.includes('modelo'))                     return produto.codigo || ''
+    if (nm.includes('altura'))                                              return produto.altura ? String(produto.altura) : ''
+    if (nm.includes('largura'))                                             return produto.largura ? String(produto.largura) : ''
+    if (nm.includes('profundidade') || nm.includes('comprimento'))         return produto.profundidade ? String(produto.profundidade) : ''
+    if (nm.includes('peso'))                                                return produto.pesoLiquido ? String(produto.pesoLiquido) : (produto.peso ? String(produto.peso) : '')
+    return ''
+  }
+
   async function selecionar(catBling, categoria) {
     setCarregandoAttrs(a => ({ ...a, [catBling]: true }))
     let attrs = []
     try { attrs = await getAtributosCategoria(categoria.category_id) } catch {}
     setCarregandoAttrs(a => ({ ...a, [catBling]: false }))
+
+    const primeiroProduto = (grupos[catBling] || [])[0]
 
     const novo = {
       ...mapeamentos,
@@ -69,7 +148,7 @@ export default function Mapeamento() {
         categoriaBling: catBling,
         mlCategoryId: categoria.category_id,
         mlCategoryName: categoria.domain_name || categoria.category_name,
-        atributos: attrs.map(a => ({ id: a.id, name: a.name, valor: '' })),
+        atributos: attrs.map(a => ({ id: a.id, name: a.name, valor: autoFillAtributo(a, primeiroProduto) })),
       },
     }
     salvar(novo)
@@ -91,6 +170,99 @@ export default function Mapeamento() {
     salvar(novo)
   }
 
+  // ─── Auto-categorização por nome (para "Sem categoria") ──────
+  const [autoNomeando, setAutoNomeando] = useState(false)
+  const [autoNomeLog, setAutoNomeLog] = useState([])
+
+  async function getBlingToken() {
+    if (!cliente?.bling?.accessToken) return null
+    const exp = cliente.bling.expiresAt && Date.now() > cliente.bling.expiresAt - 60000
+    if (exp && cliente.bling.refreshToken) {
+      try {
+        const n = await blingRefresh(cliente.bling.refreshToken)
+        atualizarTokensBling(cliente.id, n)
+        return n.accessToken
+      } catch { return null }
+    }
+    return cliente.bling.accessToken
+  }
+
+  async function autoCategorizarPorNome() {
+    const prodsSemCat = grupos['Sem categoria'] || []
+    if (!prodsSemCat.length) return
+    setAutoNomeando(true)
+    setAutoNomeLog([])
+
+    // Agrupa por tipo detectado no nome
+    const gruposTipo = {}
+    for (const p of prodsSemCat) {
+      const tipo = extrairTipoProduto(p.nome) || 'Outros'
+      if (!gruposTipo[tipo]) gruposTipo[tipo] = []
+      gruposTipo[tipo].push(p)
+    }
+
+    const catProdutos = getCategoriasProdutos(cliente.id)
+    const blingToken = await getBlingToken()
+
+    for (const [tipo, prods] of Object.entries(gruposTipo)) {
+      setAutoNomeLog(l => [...l, { tipo, status: 'buscando', msg: `Buscando "${tipo}" no ML... (${prods.length} produtos)` }])
+      try {
+        const res = await buscarCategorias(tipo)
+        if (!res || res.length === 0) {
+          setAutoNomeLog(l => l.map(i => i.tipo === tipo ? { ...i, status: 'erro', msg: 'Não encontrado no ML' } : i))
+          continue
+        }
+        const melhor = res[0]
+        let attrs = []
+        try { attrs = await getAtributosCategoria(melhor.category_id) } catch {}
+
+        // Salva mapeamento por produto e atualiza características no Bling
+        for (const prod of prods) {
+          const atributosPreenchidos = attrs.map(a => ({ id: a.id, name: a.name, valor: autoFillAtributo(a, prod) }))
+          catProdutos[prod.id] = {
+            mlCategoryId: melhor.category_id,
+            mlCategoryName: melhor.domain_name || melhor.category_name,
+            atributos: atributosPreenchidos,
+          }
+
+          // Atualiza características no Bling com os atributos ML exigidos
+          if (blingToken) {
+            const caracteristicasNovas = atributosPreenchidos
+              .filter(a => a.valor)
+              .map(a => ({ descricao: a.name, valor: a.valor }))
+
+            // Mescla com características já existentes (não sobrescreve o que já tem)
+            const existentes = Array.isArray(prod.caracteristicas) ? prod.caracteristicas : []
+            const existentesMap = {}
+            for (const c of existentes) existentesMap[(c.descricao || '').toLowerCase()] = c
+            for (const c of caracteristicasNovas) {
+              const key = (c.descricao || '').toLowerCase()
+              if (!existentesMap[key]) existentesMap[key] = c
+            }
+            const caracteristicasMerged = Object.values(existentesMap)
+
+            if (caracteristicasMerged.length > existentes.length) {
+              try { await atualizarProduto(blingToken, prod.id, { caracteristicas: caracteristicasMerged }) } catch {}
+            }
+          }
+          await new Promise(r => setTimeout(r, 150))
+        }
+        salvarCategoriasProdutos(cliente.id, catProdutos)
+
+        // Cria categoria no Bling com os campos personalizados do ML
+        if (blingToken) {
+          try { await buscarOuCriarCategoria(blingToken, tipo, attrs) } catch {}
+        }
+
+        setAutoNomeLog(l => l.map(i => i.tipo === tipo ? { ...i, status: 'ok', msg: `→ ${melhor.domain_name || melhor.category_name} (${prods.length} produtos)` } : i))
+      } catch (err) {
+        setAutoNomeLog(l => l.map(i => i.tipo === tipo ? { ...i, status: 'erro', msg: err.message || 'Erro' } : i))
+      }
+      await new Promise(r => setTimeout(r, 400))
+    }
+    setAutoNomeando(false)
+  }
+
   // ─── Auto-mapeamento ML ───────────────────────────────────────
   const [autoMapeando, setAutoMapeando] = useState(false)
   const [autoLog, setAutoLog] = useState([])
@@ -103,6 +275,10 @@ export default function Mapeamento() {
     for (const cat of categoriasBling) {
       if (novoMapa[cat]?.mlCategoryId) {
         setAutoLog(l => [...l, { cat, status: 'pulado', msg: 'Já mapeada' }])
+        continue
+      }
+      if (cat.toLowerCase() === 'sem categoria') {
+        setAutoLog(l => [...l, { cat, status: 'erro', msg: 'Sem nome — abra o item e pesquise a categoria manualmente' }])
         continue
       }
       setAutoLog(l => [...l, { cat, status: 'buscando', msg: 'Buscando no ML...' }])
@@ -135,9 +311,101 @@ export default function Mapeamento() {
     setAutoMapeando(false)
   }
 
+  // ─── Reorganizar Categorias ───────────────────────────────────
+  const [reorganizando, setReorganizando] = useState(false)
+  const [reorganizLog, setReorganizLog] = useState([])
+  const [previewCategs, setPreviewCategs] = useState(null) // null = não calculado ainda
+
   // ─── Sincronizar categorias no Bling ─────────────────────────
   const [sincBling, setSincBling] = useState(false)
   const [sincLog, setSincLog] = useState([])
+
+  async function calcularPreviewCategs() {
+    // Analisa todos os produtos e agrupa por tipo consolidado
+    const todosProdutos = Object.values(grupos).flat()
+    const agrupado = {}
+    for (const p of todosProdutos) {
+      const tipo = extrairTipoProduto(p.nome) || 'Outros'
+      if (!agrupado[tipo]) agrupado[tipo] = []
+      agrupado[tipo].push(p)
+    }
+    // Ordena por quantidade de produtos
+    const lista = Object.entries(agrupado)
+      .sort((a, b) => b[1].length - a[1].length)
+      .map(([tipo, prods]) => ({ tipo, qtd: prods.length, prods }))
+    setPreviewCategs(lista)
+  }
+
+  async function executarReorganizacao() {
+    if (!previewCategs) return
+    const blingToken = await getBlingToken()
+    if (!blingToken) { alert('Bling não conectado.'); return }
+
+    setReorganizando(true)
+    setReorganizLog([])
+
+    // 1. Deleta todas as categorias existentes no Bling
+    setReorganizLog(l => [...l, { status: 'info', msg: 'Deletando categorias existentes...' }])
+    try {
+      const categsExistentes = await listarCategorias(blingToken)
+      for (const cat of categsExistentes) {
+        try { await deletarCategoria(blingToken, cat.id) } catch {}
+        await new Promise(r => setTimeout(r, 150))
+      }
+      setReorganizLog(l => [...l, { status: 'ok', msg: `${categsExistentes.length} categorias deletadas` }])
+    } catch (e) {
+      setReorganizLog(l => [...l, { status: 'erro', msg: 'Erro ao deletar: ' + e.message }])
+    }
+
+    // 2. Cria novas categorias consolidadas com campos ML
+    const catProdutos = getCategoriasProdutos(cliente.id)
+
+    for (const { tipo, prods } of previewCategs) {
+      if (tipo === 'Outros') continue
+      setReorganizLog(l => [...l, { status: 'buscando', msg: `Criando "${tipo}"...` }])
+      try {
+        // Busca categoria no ML
+        const res = await buscarCategorias(tipo)
+        if (!res || res.length === 0) {
+          setReorganizLog(l => l.map((i, idx) => idx === l.length - 1 ? { ...i, status: 'erro', msg: `"${tipo}" não encontrado no ML` } : i))
+          continue
+        }
+        const melhor = res[0]
+        let attrs = []
+        try { attrs = await getAtributosCategoria(melhor.category_id) } catch {}
+
+        // Cria categoria no Bling com campos personalizados ML
+        const catId = await buscarOuCriarCategoria(blingToken, tipo, attrs)
+
+        // Salva mapeamento por produto e atualiza produto no Bling com nova categoria
+        for (const prod of prods) {
+          catProdutos[prod.id] = {
+            mlCategoryId: melhor.category_id,
+            mlCategoryName: melhor.domain_name || melhor.category_name,
+            atributos: attrs.map(a => ({ id: a.id, name: a.name, valor: autoFillAtributo(a, prod) })),
+          }
+          // Atualiza produto no Bling com a nova categoria
+          if (catId) {
+            try {
+              await atualizarProduto(blingToken, prod.id, { categoria: { id: catId } })
+            } catch {}
+            await new Promise(r => setTimeout(r, 150))
+          }
+        }
+        salvarCategoriasProdutos(cliente.id, catProdutos)
+
+        setReorganizLog(l => l.map((i, idx) => idx === l.length - 1 ? {
+          ...i, status: 'ok',
+          msg: `"${tipo}" → ${melhor.domain_name || melhor.category_name} (${prods.length} produtos, ${attrs.length} atributos ML)`
+        } : i))
+      } catch (err) {
+        setReorganizLog(l => l.map((i, idx) => idx === l.length - 1 ? { ...i, status: 'erro', msg: err.message } : i))
+      }
+      await new Promise(r => setTimeout(r, 500))
+    }
+
+    setReorganizando(false)
+  }
 
   async function sincronizarCategoriasNoBling() {
     if (!cliente?.bling?.accessToken) {
@@ -150,7 +418,8 @@ export default function Mapeamento() {
       if (cat === 'Sem categoria') continue
       setSincLog(l => [...l, { cat, status: 'buscando', msg: 'Verificando no Bling...' }])
       try {
-        const id = await buscarOuCriarCategoria(cliente.bling.accessToken, cat)
+        const atrsCateg = mapeamentos[cat]?.atributos || []
+        const id = await buscarOuCriarCategoria(cliente.bling.accessToken, cat, atrsCateg)
         setSincLog(l => l.map(i => i.cat === cat ? { ...i, status: 'ok', msg: `ID ${id}` } : i))
       } catch (err) {
         setSincLog(l => l.map(i => i.cat === cat ? { ...i, status: 'erro', msg: err.message } : i))
@@ -270,6 +539,62 @@ export default function Mapeamento() {
         </div>
       )}
 
+      {/* ── Reorganizar Categorias ── */}
+      <div style={{ background: '#fff', border: '1.5px solid #E2E8F0', borderRadius: 12, padding: '16px 20px', marginBottom: 20 }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: previewCategs ? 14 : 0 }}>
+          <div>
+            <p style={{ fontSize: 14, fontWeight: 800, color: '#1A202C' }}>Reorganizar Categorias</p>
+            <p style={{ fontSize: 12, color: '#718096', marginTop: 2 }}>
+              Agrupa todos os produtos em categorias consolidadas, cria no Bling com campos ML e vincula cada produto.
+            </p>
+          </div>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button onClick={calcularPreviewCategs}
+              style={{ background: '#EDF2F7', color: '#4A5568', border: '1.5px solid #E2E8F0', borderRadius: 8, padding: '8px 14px', fontSize: 13, fontWeight: 700, cursor: 'pointer' }}>
+              Ver preview
+            </button>
+            {previewCategs && (
+              <button onClick={executarReorganizacao} disabled={reorganizando}
+                style={{ display: 'flex', alignItems: 'center', gap: 7, background: reorganizando ? '#CBD5E0' : '#E53E3E', color: '#fff', border: 'none', borderRadius: 8, padding: '8px 16px', fontSize: 13, fontWeight: 700, cursor: reorganizando ? 'default' : 'pointer' }}>
+                {reorganizando ? <Loader size={13} style={{ animation: 'spin 1s linear infinite' }} /> : null}
+                {reorganizando ? 'Reorganizando...' : '⚡ Executar reorganização'}
+              </button>
+            )}
+          </div>
+        </div>
+
+        {previewCategs && !reorganizando && reorganizLog.length === 0 && (
+          <div>
+            <p style={{ fontSize: 12, fontWeight: 700, color: '#4A5568', marginBottom: 8 }}>
+              {previewCategs.length} categorias consolidadas a criar:
+            </p>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+              {previewCategs.map(({ tipo, qtd }) => (
+                <span key={tipo} style={{ fontSize: 12, background: '#EBF8FF', border: '1px solid #BEE3F8', borderRadius: 20, padding: '3px 10px', color: '#2B6CB0', fontWeight: 600 }}>
+                  {tipo} <span style={{ color: '#718096' }}>({qtd})</span>
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {reorganizLog.length > 0 && (
+          <div style={{ background: '#1A202C', borderRadius: 10, padding: '12px 16px', maxHeight: 220, overflow: 'auto', marginTop: 12 }}>
+            <p style={{ fontSize: 11, fontWeight: 700, color: '#63B3ED', marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+              {reorganizando ? '⚡ Reorganizando...' : '✓ Reorganização concluída'}
+            </p>
+            {reorganizLog.map((l, i) => (
+              <div key={i} style={{ display: 'flex', alignItems: 'flex-start', gap: 8, padding: '3px 0' }}>
+                <span style={{ fontSize: 12, color: l.status === 'ok' ? '#48BB78' : l.status === 'erro' ? '#FC8181' : l.status === 'info' ? '#F6E05E' : '#63B3ED', flexShrink: 0 }}>
+                  {l.status === 'ok' ? '✓' : l.status === 'erro' ? '✗' : l.status === 'info' ? 'ℹ' : '…'}
+                </span>
+                <span style={{ fontSize: 12, color: '#E2E8F0' }}>{l.msg}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
       {/* Lista de categorias */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
         {categoriasBling.map(cat => {
@@ -317,8 +642,39 @@ export default function Mapeamento() {
 
               {aberto && (
                 <div style={{ borderTop: '1px solid #F7FAFC', padding: 16 }}>
+                  {cat === 'Sem categoria' && (
+                    <div style={{ marginBottom: 16 }}>
+                      <div style={{ background: 'linear-gradient(135deg, #553C9A 0%, #3182CE 100%)', borderRadius: 10, padding: '14px 16px', marginBottom: 10 }}>
+                        <p style={{ fontSize: 13, fontWeight: 800, color: '#fff', marginBottom: 4 }}>Auto-categorizar por nome do produto</p>
+                        <p style={{ fontSize: 12, color: 'rgba(255,255,255,0.75)', marginBottom: 10 }}>
+                          Detecta o tipo de cada produto pelo nome (Cadeiras, Sofás, Mesas...), busca a categoria certa no ML, cria a categoria no Bling e preenche os atributos automaticamente.
+                        </p>
+                        <button onClick={autoCategorizarPorNome} disabled={autoNomeando}
+                          style={{ display: 'flex', alignItems: 'center', gap: 8, background: '#fff', color: '#553C9A', border: 'none', borderRadius: 8, padding: '9px 18px', fontSize: 13, fontWeight: 800, cursor: autoNomeando ? 'default' : 'pointer', opacity: autoNomeando ? 0.7 : 1 }}>
+                          {autoNomeando ? <Loader size={13} style={{ animation: 'spin 1s linear infinite' }} /> : <Wand2 size={13} />}
+                          {autoNomeando ? 'Categorizando...' : `Auto-categorizar ${qtd} produtos`}
+                        </button>
+                      </div>
+                      {autoNomeLog.length > 0 && (
+                        <div style={{ background: '#1A202C', borderRadius: 10, padding: '12px 16px', maxHeight: 180, overflow: 'auto' }}>
+                          <p style={{ fontSize: 11, fontWeight: 700, color: '#A78BFA', marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+                            {autoNomeando ? '⚡ Categorizando...' : '✓ Concluído'}
+                          </p>
+                          {autoNomeLog.map((l, i) => (
+                            <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '3px 0' }}>
+                              <span style={{ fontSize: 12, color: l.status === 'ok' ? '#48BB78' : l.status === 'erro' ? '#FC8181' : '#63B3ED', flexShrink: 0 }}>
+                                {l.status === 'ok' ? '✓' : l.status === 'erro' ? '✗' : '…'}
+                              </span>
+                              <span style={{ fontSize: 12, color: '#E2E8F0', fontWeight: 600 }}>{l.tipo}</span>
+                              <span style={{ fontSize: 12, color: '#718096' }}>{l.msg}</span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
                   <p style={{ fontSize: 12, fontWeight: 700, color: '#718096', marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
-                    Buscar categoria no Mercado Livre
+                    {cat === 'Sem categoria' ? 'Ou mapear todos para uma única categoria:' : 'Buscar categoria no Mercado Livre'}
                   </p>
                   <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
                     <input
