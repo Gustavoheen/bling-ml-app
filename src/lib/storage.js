@@ -126,3 +126,13 @@ export function salvarVinculo(clienteId, blingId, mlId) {
 export function getVinculo(clienteId, blingId) {
   return getVinculos(clienteId)[blingId] || null
 }
+
+// Categorias ML salvas pelo usuário (para criar no Bling)
+export function getCategoriasML(clienteId) {
+  try { return JSON.parse(localStorage.getItem(`bml_categorias_ml_${clienteId}`) || '[]') }
+  catch { return [] }
+}
+
+export function salvarCategoriasML(clienteId, lista) {
+  localStorage.setItem(`bml_categorias_ml_${clienteId}`, JSON.stringify(lista))
+}

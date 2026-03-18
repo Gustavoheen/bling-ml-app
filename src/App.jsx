@@ -10,6 +10,7 @@ import Produtos from './pages/Produtos'
 import Mapeamento from './pages/Mapeamento'
 import Exportacao from './pages/Exportacao'
 import Historico from './pages/Historico'
+import Categorias from './pages/Categorias'
 import Login from './pages/Login'
 import { getClienteAtivo } from './lib/storage'
 
@@ -40,6 +41,7 @@ export default function App() {
             <Route path="produtos" element={<Produtos />} />
             <Route path="mapeamento" element={<Mapeamento />} />
             <Route path="exportacao" element={<Exportacao />} />
+            <Route path="categorias" element={<Categorias />} />
             <Route path="historico" element={<Historico />} />
           </Route>
         </Routes>
