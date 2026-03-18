@@ -4,6 +4,7 @@ import Home from './pages/Home'
 import Auth from './pages/Auth'
 import AuthBlingCallback from './pages/AuthBlingCallback'
 import AuthMLCallback from './pages/AuthMLCallback'
+import Dashboard from './pages/Dashboard'
 import Produtos from './pages/Produtos'
 import Mapeamento from './pages/Mapeamento'
 import Exportacao from './pages/Exportacao'
@@ -25,7 +26,8 @@ export default function App() {
         <Route path="/auth/bling/callback" element={<AuthBlingCallback />} />
         <Route path="/auth/ml/callback" element={<AuthMLCallback />} />
         <Route path="/app" element={<RequireCliente><Layout /></RequireCliente>}>
-          <Route index element={<Navigate to="/app/produtos" replace />} />
+          <Route index element={<Navigate to="/app/dashboard" replace />} />
+          <Route path="dashboard" element={<Dashboard />} />
           <Route path="produtos" element={<Produtos />} />
           <Route path="mapeamento" element={<Mapeamento />} />
           <Route path="exportacao" element={<Exportacao />} />

@@ -1,13 +1,14 @@
 import { Outlet, NavLink, useNavigate } from 'react-router-dom'
 import { useState } from 'react'
 import { getClienteAtivo, getClientes, setClienteAtivo } from '../lib/storage'
-import { Package, GitMerge, Upload, History, ChevronDown, LogOut } from 'lucide-react'
+import { Package, GitMerge, Upload, History, ChevronDown, LogOut, LayoutDashboard } from 'lucide-react'
 
 const NAV = [
-  { to: '/app/produtos',    icon: Package,    label: 'Produtos'    },
-  { to: '/app/mapeamento',  icon: GitMerge,   label: 'Mapeamento'  },
-  { to: '/app/exportacao',  icon: Upload,     label: 'Exportação'  },
-  { to: '/app/historico',   icon: History,    label: 'Histórico'   },
+  { to: '/app/dashboard',   icon: LayoutDashboard, label: 'Dashboard'   },
+  { to: '/app/produtos',    icon: Package,         label: 'Produtos'    },
+  { to: '/app/mapeamento',  icon: GitMerge,        label: 'Mapeamento'  },
+  { to: '/app/exportacao',  icon: Upload,          label: 'Exportação'  },
+  { to: '/app/historico',   icon: History,         label: 'Histórico'   },
 ]
 
 export default function Layout() {
