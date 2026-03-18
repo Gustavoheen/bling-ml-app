@@ -59,39 +59,50 @@ async function blingFetch(endpoint, token, options = {}) {
   return data
 }
 
+// Extrai string de um campo que pode ser string ou objeto {id, nome}
+function strCampo(val) {
+  if (!val) return ''
+  if (typeof val === 'string') return val
+  if (typeof val === 'object') return val.nome || val.descricao || val.name || ''
+  return String(val)
+}
+
 // Normaliza o produto do Bling v3 — extrai TODOS os campos importantes
 export function normalizarProduto(raw) {
   const d = raw?.data || raw
-  if (!d) return raw
+  if (!d || typeof d !== 'object') return raw
 
   // ── Imagens: todas de midia.imagens[] ──────────────────────────
   const imagensRaw = d.midia?.imagens
   const imagens = Array.isArray(imagensRaw)
     ? imagensRaw.map(i => i.link || i.url || i.linkMiniatura).filter(Boolean)
-    : []
-  const imagemURL = imagens[0] || d.imagemURL || null
+    : (d.imagemURL ? [d.imagemURL] : [])
+  const imagemURL = imagens[0] || null
 
   // ── Dimensões ──────────────────────────────────────────────────
-  const dimensoes    = d.dimensoes || {}
-  const largura      = dimensoes.largura      ?? d.largura      ?? null
-  const altura       = dimensoes.altura       ?? d.altura       ?? null
-  const profundidade = dimensoes.profundidade ?? d.profundidade ?? null
+  const dimensoes    = d.dimensoes    || {}
+  const largura      = dimensoes.largura      != null ? dimensoes.largura      : (d.largura      ?? null)
+  const altura       = dimensoes.altura       != null ? dimensoes.altura       : (d.altura       ?? null)
+  const profundidade = dimensoes.profundidade != null ? dimensoes.profundidade : (d.profundidade ?? null)
   const unidadeMedida = dimensoes.unidadeMedida || 'cm'
 
   // ── Peso ───────────────────────────────────────────────────────
-  const pesoLiquido = d.pesoLiquido ?? d.peso ?? null
+  const pesoLiquido = d.pesoLiquido != null ? d.pesoLiquido : (d.peso ?? null)
   const pesoBruto   = d.pesoBruto   ?? null
+
+  // ── Marca: pode ser string ou objeto {id, nome} ────────────────
+  const marca = strCampo(d.marca)
 
   // ── Fiscal / Tributação ────────────────────────────────────────
   const trib = d.tributacao || {}
   const tributacao = {
     ncm:                    trib.ncm                    || d.ncm                    || '',
     cest:                   trib.cest                   || d.cest                   || '',
-    origemProduto:          trib.origemProduto          ?? d.origemProduto          ?? '0',
+    origemProduto:          String(trib.origemProduto   ?? d.origemProduto          ?? '0'),
     percentualIpi:          trib.percentualIpi          ?? d.percentualIpi          ?? 0,
     codigoEnquadramentoIpi: trib.codigoEnquadramentoIpi || d.codigoEnquadramentoIpi || '',
     codigoBeneficioFiscal:  trib.codigoBeneficioFiscal  || '',
-    pisConfins:             trib.pisConfins              || '',
+    pisConfins:             strCampo(trib.pisConfins),
   }
 
   // ── Características ────────────────────────────────────────────
@@ -112,12 +123,12 @@ export function normalizarProduto(raw) {
     id:                    d.id,
     nome:                  d.nome                  || '',
     codigo:                d.codigo                || '',
-    preco:                 d.preco                 || 0,
-    precoCusto:            d.precoCusto            || 0,
+    preco:                 d.preco                 ?? 0,
+    precoCusto:            d.precoCusto            ?? 0,
     situacao:              d.situacao              || 'A',
     tipo:                  d.tipo                  || 'P',
-    unidade:               d.unidade               || '',
-    marca:                 d.marca                 || '',
+    unidade:               strCampo(d.unidade)     || '',
+    marca,
     observacoes:           d.observacoes           || '',
     gtin:                  d.gtin                  || '',
     // Descrições

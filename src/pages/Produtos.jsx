@@ -70,6 +70,28 @@ export default function Produtos() {
     finally { setBuscandoCateg(false) }
   }
 
+  // Auto-preenche atributos ML obrigatórios com dados do produto Bling
+  function autoPreencherAtributos(attrs, produto) {
+    const vals = {}
+    const nome  = (produto?.nome  || '').toLowerCase()
+    const marca = (produto?.marca || '')
+    const gtin  = (produto?.gtin  || '')
+    const codigo = (produto?.codigo || '')
+    for (const a of attrs) {
+      const id  = a.id?.toLowerCase()
+      const nm  = (a.name || '').toLowerCase()
+      if (!vals[a.id]) {
+        if (id === 'brand' || nm.includes('marca') || nm === 'brand')        vals[a.id] = marca
+        else if (id === 'gtin' || nm === 'gtin' || nm === 'ean')             vals[a.id] = gtin
+        else if (id === 'sku'  || nm === 'sku'  || nm === 'código')          vals[a.id] = codigo
+        else if (nm.includes('model') || nm.includes('modelo'))              vals[a.id] = produto?.codigo || ''
+        else if (nm.includes('cor')   || nm.includes('color'))               vals[a.id] = ''
+        else                                                                  vals[a.id] = ''
+      }
+    }
+    return vals
+  }
+
   async function selecionarCategML(cat) {
     setCategMLSelecionada(cat)
     setResultsCatML([])
@@ -77,6 +99,8 @@ export default function Produtos() {
     try {
       const attrs = await getAtributosCategoria(cat.category_id)
       setAtributosML(attrs)
+      // Auto-preenche com dados do produto atual
+      setValoresAtributos(autoPreencherAtributos(attrs, modal?.produto))
     } catch { setAtributosML([]) }
   }
 
@@ -172,8 +196,16 @@ export default function Produtos() {
     if (mapaAtual?.mlCategoryId) {
       setCategMLSelecionada({ category_id: mapaAtual.mlCategoryId, domain_name: mapaAtual.mlCategoryName })
       setBuscaCategML(mapaAtual.mlCategoryName)
-      setAtributosML(mapaAtual.atributos?.map(a => ({ id: a.id, name: a.name })) || [])
-      setValoresAtributos(Object.fromEntries((mapaAtual.atributos || []).map(a => [a.id, a.valor || ''])))
+      const attrsDoMapa = mapaAtual.atributos?.map(a => ({ id: a.id, name: a.name })) || []
+      setAtributosML(attrsDoMapa)
+      // Usa valores salvos; preenche os vazios automaticamente com dados do produto
+      const valoresSalvos = Object.fromEntries((mapaAtual.atributos || []).map(a => [a.id, a.valor || '']))
+      const autoVals = autoPreencherAtributos(attrsDoMapa, produto)
+      const merged = {}
+      for (const a of attrsDoMapa) {
+        merged[a.id] = valoresSalvos[a.id] || autoVals[a.id] || ''
+      }
+      setValoresAtributos(merged)
     } else {
       setBuscaCategML('')
       setResultsCatML([])
