@@ -73,13 +73,20 @@ export function normalizarProduto(raw) {
   if (!d || typeof d !== 'object') return raw
 
   // ── Imagens: busca em todas as fontes possíveis ────────────────
-  const extrairUrl = i => i?.link || i?.url || i?.linkMiniatura || (typeof i === 'string' ? i : null)
+  const extrairUrl = i => i?.link || i?.url || i?.linkMiniatura || i?.linkThumbnail || (typeof i === 'string' ? i : null)
   const urlsSet = new Set()
   const imagens = []
   const addImg = i => { const u = extrairUrl(i); if (u && !urlsSet.has(u)) { urlsSet.add(u); imagens.push(u) } }
 
-  // 1. midia.imagens[] (resposta fresca do Bling)
-  if (Array.isArray(d.midia?.imagens)) d.midia.imagens.forEach(addImg)
+  // 1. midia.imagens (Bling v3 retorna objeto {externas, internas, imagensURL})
+  const midiaImgs = d.midia?.imagens
+  if (midiaImgs && typeof midiaImgs === 'object' && !Array.isArray(midiaImgs)) {
+    if (Array.isArray(midiaImgs.externas))   midiaImgs.externas.forEach(addImg)
+    if (Array.isArray(midiaImgs.internas))   midiaImgs.internas.forEach(addImg)
+    if (Array.isArray(midiaImgs.imagensURL)) midiaImgs.imagensURL.forEach(addImg)
+  } else if (Array.isArray(midiaImgs)) {
+    midiaImgs.forEach(addImg) // fallback caso retorne como array
+  }
   // 2. imagens[] já salvas no localStorage (pode ser string ou objeto)
   if (Array.isArray(d.imagens)) d.imagens.forEach(addImg)
   // 3. campo direto imagemURL

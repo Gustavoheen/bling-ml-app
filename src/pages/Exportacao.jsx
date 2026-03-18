@@ -36,13 +36,17 @@ async function getBlingToken(cliente) {
 const PROBLEMAS_DEF = [
   { id: 'preco',      label: 'Preço inválido',        check: p => !p.preco || Number(p.preco) <= 0 },
   { id: 'descricao',  label: 'Sem descrição',          check: p => !p.descricaoCurta?.trim() && !p.descricaoComplementar?.trim() && !p.nome?.trim() },
-  { id: 'imagem',     label: 'Sem imagem',             check: p => !p.imagemURL && !(Array.isArray(p.imagens) && p.imagens.length > 0) },
+  { id: 'imagem',     label: 'Sem imagem',             check: p => !p.imagemURL && !(Array.isArray(p.imagens) && p.imagens.length > 0), aviso: true },
   { id: 'categoria',  label: 'Categoria não mapeada',  check: (p, m) => !m },
   { id: 'atributos',  label: 'Atributos incompletos',  check: (p, m) => m && (m.atributos||[]).some(a=>!a.valor?.trim()) },
 ]
 
 function getProblemas(produto, mapa) {
-  return PROBLEMAS_DEF.filter(d => d.check(produto, mapa)).map(d => d.id)
+  // problemas com aviso:true não bloqueiam exportação
+  return PROBLEMAS_DEF.filter(d => !d.aviso && d.check(produto, mapa)).map(d => d.id)
+}
+function getAvisos(produto, mapa) {
+  return PROBLEMAS_DEF.filter(d => d.aviso && d.check(produto, mapa)).map(d => d.id)
 }
 
 function parsearErroML(msg) {
@@ -95,10 +99,10 @@ export default function Exportacao() {
   // enriquece produtos com análise
   const produtosAnalisados = useMemo(() => produtos.map(p => {
     const cat = p.categoria?.nome || 'Sem categoria'
-    // Usa mapeamento por produto primeiro (para produtos sem categoria no Bling)
     const mapa = categoriasProdutos[p.id] || mapeamentos[cat]
     const problemas = getProblemas(p, mapa)
-    return { ...p, _cat: cat, _mapa: mapa, _problemas: problemas, _ok: problemas.length === 0 }
+    const avisos = getAvisos(p, mapa)
+    return { ...p, _cat: cat, _mapa: mapa, _problemas: problemas, _avisos: avisos, _ok: problemas.length === 0 }
   }), [produtos, mapeamentos, categoriasProdutos])
 
   const prontos     = produtosAnalisados.filter(p => p._ok)
@@ -603,6 +607,7 @@ export default function Exportacao() {
                     <td style={{ padding: '10px 16px' }}>
                       <p style={{ fontSize: 13, fontWeight: 600, color: '#1A202C' }}>{p.nome}</p>
                       <p style={{ fontSize: 11, color: '#718096', marginTop: 2 }}>{p._cat}</p>
+                      {p._avisos?.includes('imagem') && <p style={{ fontSize: 10, color: '#D69E2E', marginTop: 2 }}>⚠ Sem imagem no Bling</p>}
                     </td>
                     <td style={{ padding: '10px 16px' }}><span style={{ fontSize: 12, color: '#4A5568' }}>{p._mapa?.mlCategoryName}</span></td>
                     <td style={{ padding: '10px 16px', textAlign: 'right' }}><span style={{ fontSize: 13, fontWeight: 700 }}>{p.preco ? `R$ ${Number(p.preco).toFixed(2)}` : '—'}</span></td>
