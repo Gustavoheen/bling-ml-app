@@ -196,11 +196,21 @@ export default function Exportacao() {
           <h2 style={{ fontSize: 20, fontWeight: 800, color: '#1A202C', marginBottom: 4 }}>Exportação para ML</h2>
           <p style={{ fontSize: 13, color: '#718096' }}>{prontos.length} prontos · {comProblema.length} com problemas</p>
         </div>
-        <button onClick={exportar} disabled={selecionados.size === 0 || exportando}
-          style={{ display: 'flex', alignItems: 'center', gap: 8, background: selecionados.size > 0 && !exportando ? '#1A202C' : '#CBD5E0', color: '#fff', border: 'none', borderRadius: 8, padding: '10px 20px', fontSize: 13, fontWeight: 700 }}>
-          <Upload size={14} />
-          {exportando ? 'Publicando...' : `Publicar ${selecionados.size > 0 ? `(${selecionados.size})` : ''}`}
-        </button>
+        <div style={{ display: 'flex', gap: 10 }}>
+          {prontos.length > 0 && (
+            <button onClick={() => { setSelecionados(new Set(prontos.map(p => p.id))); setTimeout(exportar, 50) }}
+              disabled={exportando}
+              style={{ display: 'flex', alignItems: 'center', gap: 8, background: exportando ? '#CBD5E0' : '#48BB78', color: '#fff', border: 'none', borderRadius: 8, padding: '10px 20px', fontSize: 13, fontWeight: 800 }}>
+              <Upload size={14} />
+              {exportando ? 'Publicando...' : `Publicar tudo (${prontos.length})`}
+            </button>
+          )}
+          <button onClick={exportar} disabled={selecionados.size === 0 || exportando}
+            style={{ display: 'flex', alignItems: 'center', gap: 8, background: selecionados.size > 0 && !exportando ? '#1A202C' : '#CBD5E0', color: '#fff', border: 'none', borderRadius: 8, padding: '10px 20px', fontSize: 13, fontWeight: 700 }}>
+            <Upload size={14} />
+            {exportando ? '...' : `Selecionados ${selecionados.size > 0 ? `(${selecionados.size})` : ''}`}
+          </button>
+        </div>
       </div>
 
       {/* Resultados */}

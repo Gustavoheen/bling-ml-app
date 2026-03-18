@@ -1,9 +1,9 @@
-import { useState, useEffect } from 'react'
+import { useState, useMemo } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { getClienteAtivo, getProdutos, getMapeamentos, salvarMapeamentos } from '../lib/storage'
 import { buscarCategorias, getAtributosCategoria } from '../lib/ml'
-import { Search, CheckCircle, Circle, ChevronDown, ChevronUp, AlertCircle, GitMerge } from 'lucide-react'
+import { Search, CheckCircle, Circle, ChevronDown, ChevronUp, GitMerge, ArrowRight, Loader } from 'lucide-react'
 
-// Agrupa produtos por categoria Bling
 function agruparPorCategoria(produtos) {
   const mapa = {}
   for (const p of produtos) {
@@ -15,32 +15,32 @@ function agruparPorCategoria(produtos) {
 }
 
 export default function Mapeamento() {
+  const navigate = useNavigate()
   const cliente = getClienteAtivo()
   const produtos = getProdutos(cliente?.id || '')
+
   const [mapeamentos, setMapeamentos] = useState(() => {
     const m = getMapeamentos(cliente?.id || '')
-    // Converte array para mapa { categoriaBling: { mlCategoryId, mlCategoryName, atributos } }
-    if (Array.isArray(m)) {
-      const obj = {}
-      for (const item of m) obj[item.categoriaBling] = item
-      return obj
-    }
-    return m || {}
+    const obj = {}
+    for (const item of (Array.isArray(m) ? m : [])) obj[item.categoriaBling] = item
+    return obj
   })
 
-  const grupos = agruparPorCategoria(produtos)
+  const grupos = useMemo(() => agruparPorCategoria(produtos), [produtos])
   const categoriasBling = Object.keys(grupos).sort()
+  const totalMapeadas = categoriasBling.filter(c => mapeamentos[c]?.mlCategoryId).length
+  const totalProdutos = categoriasBling.filter(c => mapeamentos[c]?.mlCategoryId)
+    .reduce((acc, c) => acc + grupos[c].length, 0)
 
   const [expandido, setExpandido] = useState(null)
   const [buscaML, setBuscaML] = useState({})
   const [resultados, setResultados] = useState({})
   const [buscando, setBuscando] = useState({})
-  const [atributos, setAtributos] = useState({})
+  const [carregandoAttrs, setCarregandoAttrs] = useState({})
 
   function salvar(novo) {
     setMapeamentos(novo)
-    const arr = Object.values(novo)
-    salvarMapeamentos(cliente.id, arr)
+    salvarMapeamentos(cliente.id, Object.values(novo))
   }
 
   async function buscar(catBling, query) {
@@ -57,42 +57,39 @@ export default function Mapeamento() {
   }
 
   async function selecionar(catBling, categoria) {
-    // Busca atributos obrigatórios
+    setCarregandoAttrs(a => ({ ...a, [catBling]: true }))
     let attrs = []
-    try {
-      attrs = await getAtributosCategoria(categoria.category_id)
-    } catch { }
-    setAtributos(a => ({ ...a, [catBling]: attrs }))
+    try { attrs = await getAtributosCategoria(categoria.category_id) } catch {}
+    setCarregandoAttrs(a => ({ ...a, [catBling]: false }))
 
     const novo = {
       ...mapeamentos,
       [catBling]: {
         categoriaBling: catBling,
         mlCategoryId: categoria.category_id,
-        mlCategoryName: categoria.category_name || categoria.domain_name,
+        mlCategoryName: categoria.domain_name || categoria.category_name,
         atributos: attrs.map(a => ({ id: a.id, name: a.name, valor: '' })),
       },
     }
     salvar(novo)
     setResultados(r => ({ ...r, [catBling]: [] }))
     setBuscaML(b => ({ ...b, [catBling]: '' }))
+    // Abre para preencher atributos se houver
+    if (attrs.length > 0) setExpandido(catBling)
   }
 
   function atualizarAtributo(catBling, atributoId, valor) {
     const m = mapeamentos[catBling]
     if (!m) return
     const novosAtrs = m.atributos.map(a => a.id === atributoId ? { ...a, valor } : a)
-    const novo = { ...mapeamentos, [catBling]: { ...m, atributos: novosAtrs } }
-    salvar(novo)
+    salvar({ ...mapeamentos, [catBling]: { ...m, atributos: novosAtrs } })
   }
 
-  function removerMapeamento(catBling) {
+  function remover(catBling) {
     const novo = { ...mapeamentos }
     delete novo[catBling]
     salvar(novo)
   }
-
-  const totalMapeadas = categoriasBling.filter(c => mapeamentos[c]?.mlCategoryId).length
 
   if (produtos.length === 0) {
     return (
@@ -100,8 +97,7 @@ export default function Mapeamento() {
         <h2 style={{ fontSize: 20, fontWeight: 800, color: '#1A202C', marginBottom: 24 }}>Mapeamento de Categorias</h2>
         <div style={{ background: '#fff', border: '1.5px dashed #CBD5E0', borderRadius: 14, padding: '48px 24px', textAlign: 'center' }}>
           <GitMerge size={40} color="#CBD5E0" style={{ marginBottom: 16 }} />
-          <p style={{ fontWeight: 700, color: '#A0AEC0', fontSize: 16 }}>Sem produtos para mapear</p>
-          <p style={{ fontSize: 13, color: '#CBD5E0', marginTop: 6 }}>Sincronize produtos na aba "Produtos" primeiro.</p>
+          <p style={{ fontWeight: 700, color: '#A0AEC0' }}>Sincronize produtos primeiro na aba "Produtos".</p>
         </div>
       </div>
     )
@@ -109,58 +105,84 @@ export default function Mapeamento() {
 
   return (
     <div>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 24 }}>
+      {/* Header */}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20 }}>
         <div>
           <h2 style={{ fontSize: 20, fontWeight: 800, color: '#1A202C', marginBottom: 4 }}>Mapeamento de Categorias</h2>
           <p style={{ fontSize: 13, color: '#718096' }}>
-            {totalMapeadas}/{categoriasBling.length} categorias mapeadas
+            {totalMapeadas} de {categoriasBling.length} categorias mapeadas · {totalProdutos} produtos prontos
           </p>
         </div>
-        <div style={{
-          background: totalMapeadas === categoriasBling.length ? 'rgba(72,187,120,0.1)' : 'rgba(252,193,7,0.1)',
-          color: totalMapeadas === categoriasBling.length ? '#48BB78' : '#D69E2E',
-          borderRadius: 20, padding: '6px 14px', fontSize: 12, fontWeight: 700,
-        }}>
-          {totalMapeadas === categoriasBling.length ? '✓ Todas mapeadas' : `${categoriasBling.length - totalMapeadas} pendentes`}
+        {totalMapeadas > 0 && (
+          <button onClick={() => navigate('/app/exportacao')}
+            style={{ display: 'flex', alignItems: 'center', gap: 8, background: '#1A202C', color: '#fff', border: 'none', borderRadius: 8, padding: '10px 20px', fontSize: 13, fontWeight: 700 }}>
+            Publicar {totalProdutos} produtos <ArrowRight size={14} />
+          </button>
+        )}
+      </div>
+
+      {/* Progresso geral */}
+      <div style={{ background: '#fff', border: '1.5px solid #E2E8F0', borderRadius: 12, padding: '16px 20px', marginBottom: 20 }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+          <span style={{ fontSize: 13, fontWeight: 700, color: '#1A202C' }}>Progresso do mapeamento</span>
+          <span style={{ fontSize: 13, fontWeight: 800, color: totalMapeadas === categoriasBling.length ? '#48BB78' : '#718096' }}>
+            {totalMapeadas}/{categoriasBling.length}
+          </span>
+        </div>
+        <div style={{ height: 8, background: '#F7FAFC', borderRadius: 99, overflow: 'hidden' }}>
+          <div style={{ height: '100%', width: `${(totalMapeadas / categoriasBling.length) * 100}%`, background: '#48BB78', borderRadius: 99, transition: 'width 0.3s' }} />
         </div>
       </div>
 
+      {/* Lista de categorias */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
         {categoriasBling.map(cat => {
           const mapeada = mapeamentos[cat]
           const aberto = expandido === cat
+          const qtd = grupos[cat].length
+          const atrsObrigatorios = mapeada?.atributos?.filter(a => !a.valor?.trim()) || []
+          const completa = mapeada?.mlCategoryId && atrsObrigatorios.length === 0
 
           return (
             <div key={cat} style={{
-              background: '#fff', border: `1.5px solid ${mapeada ? '#48BB78' : '#E2E8F0'}`,
+              background: '#fff',
+              border: `1.5px solid ${completa ? '#48BB78' : mapeada ? '#FBD38D' : '#E2E8F0'}`,
               borderRadius: 12, overflow: 'hidden',
             }}>
               {/* Cabeçalho */}
-              <button
-                onClick={() => setExpandido(aberto ? null : cat)}
-                style={{
-                  width: '100%', padding: '14px 16px',
-                  display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                  background: 'none', border: 'none', textAlign: 'left',
-                }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                  {mapeada
-                    ? <CheckCircle size={16} color="#48BB78" />
-                    : <Circle size={16} color="#CBD5E0" />}
+              <button onClick={() => setExpandido(aberto ? null : cat)}
+                style={{ width: '100%', padding: '14px 16px', background: 'none', border: 'none', textAlign: 'left', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                  {completa
+                    ? <CheckCircle size={18} color="#48BB78" />
+                    : mapeada
+                    ? <div style={{ width: 18, height: 18, borderRadius: '50%', background: '#FBD38D', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, fontWeight: 800, color: '#744210' }}>!</div>
+                    : <Circle size={18} color="#CBD5E0" />}
                   <div>
                     <p style={{ fontSize: 14, fontWeight: 700, color: '#1A202C' }}>{cat}</p>
                     <p style={{ fontSize: 12, color: '#718096', marginTop: 2 }}>
-                      {grupos[cat].length} produto{grupos[cat].length > 1 ? 's' : ''}
-                      {mapeada ? ` → ${mapeada.mlCategoryName}` : ' — sem mapeamento'}
+                      {qtd} produto{qtd > 1 ? 's' : ''}
+                      {mapeada ? ` → ${mapeada.mlCategoryName}` : ' — clique para mapear'}
+                      {mapeada && atrsObrigatorios.length > 0 ? ` · ${atrsObrigatorios.length} atributo${atrsObrigatorios.length > 1 ? 's' : ''} pendente${atrsObrigatorios.length > 1 ? 's' : ''}` : ''}
                     </p>
                   </div>
                 </div>
-                {aberto ? <ChevronUp size={16} color="#718096" /> : <ChevronDown size={16} color="#718096" />}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  {mapeada && (
+                    <button onClick={e => { e.stopPropagation(); remover(cat) }}
+                      style={{ fontSize: 11, color: '#CBD5E0', background: 'none', border: 'none', fontWeight: 600 }}
+                      onMouseEnter={e => e.currentTarget.style.color = '#FC8181'}
+                      onMouseLeave={e => e.currentTarget.style.color = '#CBD5E0'}>
+                      Remover
+                    </button>
+                  )}
+                  {aberto ? <ChevronUp size={16} color="#718096" /> : <ChevronDown size={16} color="#718096" />}
+                </div>
               </button>
 
               {/* Conteúdo expandido */}
               {aberto && (
-                <div style={{ borderTop: '1px solid #F7FAFC', padding: '16px' }}>
+                <div style={{ borderTop: '1px solid #F7FAFC', padding: 16 }}>
                   {/* Busca ML */}
                   <p style={{ fontSize: 12, fontWeight: 700, color: '#718096', marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
                     Buscar categoria no Mercado Livre
@@ -172,21 +194,12 @@ export default function Mapeamento() {
                       value={buscaML[cat] || ''}
                       onChange={e => setBuscaML(b => ({ ...b, [cat]: e.target.value }))}
                       onKeyDown={e => e.key === 'Enter' && buscar(cat, buscaML[cat] || '')}
-                      style={{
-                        flex: 1, padding: '9px 12px', border: '1.5px solid #E2E8F0',
-                        borderRadius: 8, fontSize: 13, outline: 'none',
-                      }}
+                      style={{ flex: 1, padding: '9px 12px', border: '1.5px solid #E2E8F0', borderRadius: 8, fontSize: 13, outline: 'none' }}
                     />
-                    <button
-                      onClick={() => buscar(cat, buscaML[cat] || cat)}
-                      disabled={buscando[cat]}
-                      style={{
-                        background: '#1A202C', color: '#fff', border: 'none',
-                        borderRadius: 8, padding: '9px 16px', fontSize: 13, fontWeight: 700,
-                        display: 'flex', alignItems: 'center', gap: 6,
-                      }}>
-                      <Search size={13} />
-                      {buscando[cat] ? '...' : 'Buscar'}
+                    <button onClick={() => buscar(cat, buscaML[cat] || cat)} disabled={buscando[cat]}
+                      style={{ background: '#1A202C', color: '#fff', border: 'none', borderRadius: 8, padding: '9px 16px', fontSize: 13, fontWeight: 700, display: 'flex', alignItems: 'center', gap: 6 }}>
+                      {buscando[cat] ? <Loader size={13} style={{ animation: 'spin 1s linear infinite' }} /> : <Search size={13} />}
+                      Buscar
                     </button>
                   </div>
 
@@ -194,14 +207,8 @@ export default function Mapeamento() {
                   {(resultados[cat] || []).length > 0 && (
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 12 }}>
                       {resultados[cat].map(r => (
-                        <button
-                          key={r.category_id}
-                          onClick={() => selecionar(cat, r)}
-                          style={{
-                            padding: '10px 14px', background: '#F7FAFC',
-                            border: '1.5px solid #E2E8F0', borderRadius: 8,
-                            textAlign: 'left', fontSize: 13,
-                          }}
+                        <button key={r.category_id} onClick={() => selecionar(cat, r)}
+                          style={{ padding: '10px 14px', background: '#F7FAFC', border: '1.5px solid #E2E8F0', borderRadius: 8, textAlign: 'left', fontSize: 13 }}
                           onMouseEnter={e => { e.currentTarget.style.borderColor = '#63B3ED'; e.currentTarget.style.background = 'rgba(99,179,237,0.05)' }}
                           onMouseLeave={e => { e.currentTarget.style.borderColor = '#E2E8F0'; e.currentTarget.style.background = '#F7FAFC' }}>
                           <span style={{ fontWeight: 700, color: '#1A202C' }}>{r.domain_name}</span>
@@ -211,30 +218,30 @@ export default function Mapeamento() {
                     </div>
                   )}
 
+                  {carregandoAttrs[cat] && (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 0', color: '#718096', fontSize: 13 }}>
+                      <Loader size={14} style={{ animation: 'spin 1s linear infinite' }} /> Carregando atributos obrigatórios...
+                    </div>
+                  )}
+
                   {/* Mapeamento atual */}
                   {mapeada && (
-                    <div style={{ background: 'rgba(72,187,120,0.06)', border: '1px solid rgba(72,187,120,0.2)', borderRadius: 10, padding: '12px 14px', marginBottom: mapeada.atributos?.length ? 14 : 0 }}>
-                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                        <div>
-                          <p style={{ fontSize: 12, fontWeight: 700, color: '#48BB78', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Mapeado para</p>
-                          <p style={{ fontSize: 14, fontWeight: 700, color: '#1A202C', marginTop: 2 }}>{mapeada.mlCategoryName}</p>
-                          <p style={{ fontSize: 11, color: '#718096', fontFamily: 'monospace' }}>{mapeada.mlCategoryId}</p>
-                        </div>
-                        <button onClick={() => removerMapeamento(cat)}
-                          style={{ background: 'none', border: 'none', color: '#FC8181', fontSize: 12, fontWeight: 600 }}>
-                          Remover
-                        </button>
-                      </div>
+                    <div style={{ background: completa ? 'rgba(72,187,120,0.06)' : 'rgba(252,193,7,0.06)', border: `1px solid ${completa ? 'rgba(72,187,120,0.2)' : 'rgba(252,193,7,0.3)'}`, borderRadius: 10, padding: '12px 14px', marginTop: resultados[cat]?.length ? 0 : 0 }}>
+                      <p style={{ fontSize: 11, fontWeight: 700, color: completa ? '#48BB78' : '#D69E2E', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 2 }}>
+                        {completa ? '✓ Mapeado e completo' : '⚠ Mapeado — preencha os atributos'}
+                      </p>
+                      <p style={{ fontSize: 14, fontWeight: 700, color: '#1A202C' }}>{mapeada.mlCategoryName}</p>
+                      <p style={{ fontSize: 11, color: '#718096', fontFamily: 'monospace' }}>{mapeada.mlCategoryId}</p>
                     </div>
                   )}
 
                   {/* Atributos obrigatórios */}
                   {mapeada?.atributos?.length > 0 && (
                     <div style={{ marginTop: 14 }}>
-                      <p style={{ fontSize: 12, fontWeight: 700, color: '#718096', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 10 }}>
-                        Atributos obrigatórios
+                      <p style={{ fontSize: 12, fontWeight: 700, color: '#4A5568', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 10 }}>
+                        Atributos obrigatórios — aplicados a todos os {qtd} produtos desta categoria
                       </p>
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
                         {mapeada.atributos.map(a => (
                           <div key={a.id}>
                             <label style={{ fontSize: 12, fontWeight: 600, color: '#4A5568', display: 'block', marginBottom: 4 }}>
@@ -244,10 +251,10 @@ export default function Mapeamento() {
                               type="text"
                               value={a.valor || ''}
                               onChange={e => atualizarAtributo(cat, a.id, e.target.value)}
-                              placeholder={`Valor para ${a.name}`}
+                              placeholder={`Ex: ${a.name}`}
                               style={{
                                 width: '100%', padding: '8px 10px',
-                                border: `1.5px solid ${a.valor ? '#48BB78' : '#E2E8F0'}`,
+                                border: `1.5px solid ${a.valor ? '#48BB78' : '#FBD38D'}`,
                                 borderRadius: 6, fontSize: 13, outline: 'none', boxSizing: 'border-box',
                               }}
                             />
@@ -262,6 +269,26 @@ export default function Mapeamento() {
           )
         })}
       </div>
+
+      {/* CTA final */}
+      {totalMapeadas > 0 && (
+        <div style={{ marginTop: 24, background: '#1A202C', borderRadius: 14, padding: '20px 24px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <div>
+            <p style={{ fontSize: 15, fontWeight: 800, color: '#fff' }}>{totalProdutos} produtos prontos para publicar</p>
+            <p style={{ fontSize: 13, color: '#718096', marginTop: 4 }}>
+              {categoriasBling.length - totalMapeadas > 0
+                ? `${categoriasBling.length - totalMapeadas} categorias ainda sem mapeamento`
+                : 'Todas as categorias mapeadas ✓'}
+            </p>
+          </div>
+          <button onClick={() => navigate('/app/exportacao')}
+            style={{ display: 'flex', alignItems: 'center', gap: 8, background: '#63B3ED', color: '#1A202C', border: 'none', borderRadius: 10, padding: '12px 24px', fontSize: 14, fontWeight: 800 }}>
+            Publicar no ML <ArrowRight size={16} />
+          </button>
+        </div>
+      )}
+
+      <style>{`@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
     </div>
   )
 }
