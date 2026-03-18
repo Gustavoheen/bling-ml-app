@@ -103,3 +103,19 @@ export async function criarProduto(token, dados) {
     body: JSON.stringify(dados),
   })
 }
+
+// Busca categoria Bling por nome, cria se não existir
+export async function buscarOuCriarCategoria(token, nome) {
+  try {
+    const data = await blingFetch('/categorias/produtos?limit=100', token)
+    const lista = data?.data || []
+    const existente = lista.find(c => c.descricao?.toLowerCase() === nome.toLowerCase())
+    if (existente) return existente.id
+  } catch {}
+  // Cria nova categoria
+  const resp = await blingFetch('/categorias/produtos', token, {
+    method: 'POST',
+    body: JSON.stringify({ descricao: nome }),
+  })
+  return resp?.data?.id || null
+}

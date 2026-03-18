@@ -110,3 +110,19 @@ export function adicionarHistorico(clienteId, entrada) {
   hist.unshift({ ...entrada, id: Date.now(), criadoEm: new Date().toISOString() })
   localStorage.setItem(`bml_historico_${clienteId}`, JSON.stringify(hist.slice(0, 100)))
 }
+
+// Vínculos Bling ID → ML Item ID (sincronização permanente)
+export function getVinculos(clienteId) {
+  try { return JSON.parse(localStorage.getItem(`bml_vinculos_${clienteId}`) || '{}') }
+  catch { return {} }
+}
+
+export function salvarVinculo(clienteId, blingId, mlId) {
+  const v = getVinculos(clienteId)
+  v[blingId] = mlId
+  localStorage.setItem(`bml_vinculos_${clienteId}`, JSON.stringify(v))
+}
+
+export function getVinculo(clienteId, blingId) {
+  return getVinculos(clienteId)[blingId] || null
+}

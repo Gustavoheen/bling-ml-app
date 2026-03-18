@@ -1,8 +1,8 @@
 import { useState, useMemo } from 'react'
-import { getClienteAtivo, getProdutos, salvarProdutos, atualizarTokensBling, getMapeamentos, salvarMapeamentos } from '../lib/storage'
-import { getTodosProdutos, atualizarProduto, criarProduto, refreshToken as blingRefresh } from '../lib/bling'
-import { buscarCategorias, getAtributosCategoria } from '../lib/ml'
-import { RefreshCw, Search, Package, Plus, Edit2, X, Save, AlertCircle, CheckCircle, Loader } from 'lucide-react'
+import { getClienteAtivo, getProdutos, salvarProdutos, atualizarTokensBling, atualizarTokensML, getMapeamentos, salvarMapeamentos, salvarVinculo, getVinculo, adicionarHistorico } from '../lib/storage'
+import { getTodosProdutos, atualizarProduto, criarProduto, buscarOuCriarCategoria, refreshToken as blingRefresh } from '../lib/bling'
+import { buscarCategorias, getAtributosCategoria, publicarProduto, atualizarProduto as atualizarProdutoML, blingParaMLPayload, refreshToken as mlRefresh } from '../lib/ml'
+import { RefreshCw, Search, Package, Plus, Edit2, X, Save, AlertCircle, CheckCircle, Loader, Upload } from 'lucide-react'
 
 async function getTokenValido(cliente) {
   if (!cliente?.bling?.accessToken) throw new Error('Bling não conectado.')
@@ -53,6 +53,7 @@ export default function Produtos() {
   const [salvando, setSalvando] = useState(false)
   const [erroModal, setErroModal] = useState('')
   const [sucessoModal, setSucessoModal] = useState(false)
+  const [etapaSalvo, setEtapaSalvo] = useState('') // 'bling' | 'ml' | 'ok'
 
   // Seletor de categoria ML no modal
   const [buscaCategML, setBuscaCategML] = useState('')
@@ -158,12 +159,33 @@ export default function Produtos() {
     setValoresAtributos({})
   }
 
+  async function getMLToken() {
+    const c = getClienteAtivo()
+    if (!c?.ml?.accessToken) return null
+    const exp = c.ml.expiresAt && Date.now() > c.ml.expiresAt - 60000
+    if (exp && c.ml.refreshToken) {
+      const n = await mlRefresh(c.ml.refreshToken)
+      atualizarTokensML(c.id, n)
+      return n.accessToken
+    }
+    return c.ml.accessToken
+  }
+
   async function salvar() {
     if (!form.nome?.trim() || !form.preco) { setErroModal('Nome e preço são obrigatórios.'); return }
     setSalvando(true)
     setErroModal('')
+    setEtapaSalvo('')
     try {
-      const token = await getTokenValido(getClienteAtivo())
+      const blingToken = await getTokenValido(getClienteAtivo())
+      const catNome = modal.isNovo ? form.categoria : (modal.produto?.categoria?.nome || 'Sem categoria')
+
+      // 1. Cria/garante categoria no Bling se foi selecionada categoria ML
+      let categoriaId = modal.produto?.categoria?.id
+      if (categMLSelecionada && catNome) {
+        try { categoriaId = await buscarOuCriarCategoria(blingToken, catNome) } catch {}
+      }
+
       const dados = {
         nome: form.nome,
         codigo: form.codigo || undefined,
@@ -175,32 +197,67 @@ export default function Produtos() {
         largura: parseFloat(form.largura) || undefined,
         profundidade: parseFloat(form.profundidade) || undefined,
         gtin: form.gtin || undefined,
+        ...(categoriaId ? { categoria: { id: categoriaId } } : {}),
       }
 
+      // 2. Salva no Bling
+      setEtapaSalvo('bling')
+      let blingId = modal.produto?.id
       if (modal.isNovo) {
-        await criarProduto(token, dados)
+        const resp = await criarProduto(blingToken, dados)
+        blingId = resp?.data?.id
       } else {
-        await atualizarProduto(token, modal.produto.id, dados)
+        await atualizarProduto(blingToken, modal.produto.id, dados)
       }
 
-      // Salva mapeamento ML se categoria foi selecionada
-      const catNomeEdit = modal.isNovo ? form.categoria : (modal.produto?.categoria?.nome || 'Sem categoria')
-      if (categMLSelecionada && catNomeEdit) {
+      // 3. Salva mapeamento ML
+      if (categMLSelecionada && catNome) {
         const mapArr = getMapeamentos(cliente.id)
         const mapObj = {}
         for (const i of (Array.isArray(mapArr) ? mapArr : [])) mapObj[i.categoriaBling] = i
-        mapObj[catNomeEdit] = {
-          categoriaBling: catNomeEdit,
+        mapObj[catNome] = {
+          categoriaBling: catNome,
           mlCategoryId: categMLSelecionada.category_id,
           mlCategoryName: categMLSelecionada.domain_name || categMLSelecionada.category_name,
           atributos: atributosML.map(a => ({ id: a.id, name: a.name, valor: valoresAtributos[a.id] || '' })),
         }
         salvarMapeamentos(cliente.id, Object.values(mapObj))
+
+        // 4. Exporta para ML automaticamente
+        setEtapaSalvo('ml')
+        try {
+          const mlToken = await getMLToken()
+          if (mlToken && blingId) {
+            const mapa = mapObj[catNome]
+            const produtoCompleto = { ...dados, id: blingId, categoria: { nome: catNome }, estoque: modal.produto?.estoque || { saldoVirtualTotal: 0 } }
+            const config = (() => { try { return JSON.parse(localStorage.getItem('bml_export_config') || '{}') } catch { return {} } })()
+            const mlIdExistente = getVinculo(cliente.id, String(blingId))
+
+            if (mlIdExistente) {
+              // Já publicado antes — atualiza
+              await atualizarProdutoML(mlToken, mlIdExistente, {
+                price: parseFloat(form.preco),
+                available_quantity: produtoCompleto.estoque?.saldoVirtualTotal || 0,
+              })
+              adicionarHistorico(cliente.id, { tipo: 'atualizar', produtoId: blingId, produtoNome: form.nome, mlId: mlIdExistente, status: 'ok' })
+            } else {
+              // Primeira vez — publica
+              const payload = blingParaMLPayload(produtoCompleto, mapa.mlCategoryId, mapa.atributos, config)
+              const resp = await publicarProduto(mlToken, payload)
+              salvarVinculo(cliente.id, String(blingId), resp.id)
+              adicionarHistorico(cliente.id, { tipo: 'publicar', produtoId: blingId, produtoNome: form.nome, mlId: resp.id, status: 'ok' })
+            }
+          }
+        } catch (mlErr) {
+          // Erro no ML não impede o fluxo — reporta mas continua
+          setErroModal(`Salvo no Bling ✓, mas erro no ML: ${mlErr.message}`)
+        }
       }
 
+      setEtapaSalvo('ok')
       setSucessoModal(true)
       await sincronizar()
-      setTimeout(() => { setModal(null); setSucessoModal(false) }, 1200)
+      setTimeout(() => { setModal(null); setSucessoModal(false); setEtapaSalvo('') }, 1500)
     } catch (e) {
       setErroModal(e.message)
     } finally {
@@ -446,7 +503,14 @@ export default function Produtos() {
                 <button onClick={salvar} disabled={salvando}
                   style={{ flex: 1, background: salvando ? '#CBD5E0' : '#1A202C', color: '#fff', border: 'none', borderRadius: 8, padding: '12px 0', fontSize: 14, fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
                   <Save size={14} />
-                  {salvando ? 'Salvando...' : modal.isNovo ? 'Criar no Bling' : 'Salvar no Bling'}
+                  {salvando
+                    ? etapaSalvo === 'bling' ? '1/3 Salvando no Bling...'
+                    : etapaSalvo === 'ml'    ? '2/3 Publicando no ML...'
+                    : '3/3 Finalizando...'
+                    : modal.isNovo
+                    ? categMLSelecionada ? 'Criar no Bling + Publicar no ML' : 'Criar no Bling'
+                    : categMLSelecionada ? 'Salvar no Bling + Sincronizar ML' : 'Salvar no Bling'
+                  }
                 </button>
                 <button onClick={() => setModal(null)}
                   style={{ background: '#F7FAFC', border: '1.5px solid #E2E8F0', color: '#718096', borderRadius: 8, padding: '12px 20px', fontSize: 14, fontWeight: 600 }}>
