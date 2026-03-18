@@ -43,32 +43,20 @@ export async function refreshToken(refreshTk) {
 }
 
 async function blingFetch(endpoint, token, options = {}) {
-  // Usa proxy para métodos de escrita para evitar CORS
   const method = options.method || 'GET'
-  if (method !== 'GET') {
-    const res = await fetch('/api/bling-proxy', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ endpoint, method, body: options.body ? JSON.parse(options.body) : undefined, accessToken: token }),
-    })
-    const data = await res.json()
-    if (!res.ok) throw new Error(data?.error?.description || data?.error || `Erro ${res.status}`)
-    return data
-  }
-  const res = await fetch(`${BASE_URL}${endpoint}`, {
-    ...options,
-    headers: {
-      'Authorization': `Bearer ${token}`,
-      'Accept': 'application/json',
-      'Content-Type': 'application/json',
-      ...(options.headers || {}),
-    },
+  const res = await fetch('/api/bling-proxy', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      endpoint,
+      method,
+      body: options.body ? JSON.parse(options.body) : undefined,
+      accessToken: token,
+    }),
   })
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}))
-    throw new Error(err?.error?.description || `Erro ${res.status}`)
-  }
-  return res.json()
+  const data = await res.json()
+  if (!res.ok) throw new Error(data?.error?.description || data?.error || `Erro ${res.status}`)
+  return data
 }
 
 export async function getProdutos(token, pagina = 1) {
