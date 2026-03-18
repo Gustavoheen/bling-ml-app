@@ -324,3 +324,35 @@ export async function buscarOuCriarCategoria(token, nome, atributosML = []) {
 
   return categoriaId
 }
+
+// ── Pedidos de Venda ───────────────────────────────────────────
+
+// Situações Bling v3: 6=Em Digitação, 9=Atendido, 12=Cancelado,
+// 15=Em Andamento, 18=Verificado, 21=Lançado, 24=Confirmado e Pago
+
+export async function getPedidos(token, params = {}) {
+  const query = new URLSearchParams({ limite: 100, ...params }).toString()
+  return blingFetch(`/pedidos/vendas?${query}`, token)
+}
+
+export async function getTodosPedidos(token, dataInicial, dataFinal, onProgress) {
+  let pagina = 1
+  let todos = []
+  while (true) {
+    const params = { pagina }
+    if (dataInicial) params.dataInicial = dataInicial
+    if (dataFinal) params.dataFinal = dataFinal
+    const data = await getPedidos(token, params)
+    const itens = data?.data || []
+    todos = [...todos, ...itens]
+    if (onProgress) onProgress(todos.length)
+    if (itens.length < 100) break
+    pagina++
+    await new Promise(r => setTimeout(r, 250))
+  }
+  return todos
+}
+
+export async function getPedidoDetalhe(token, id) {
+  return blingFetch(`/pedidos/vendas/${id}`, token)
+}

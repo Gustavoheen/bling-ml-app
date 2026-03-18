@@ -36,7 +36,7 @@ async function getBlingToken(cliente) {
 const PROBLEMAS_DEF = [
   { id: 'preco',      label: 'Preço inválido',        check: p => !p.preco || Number(p.preco) <= 0 },
   { id: 'descricao',  label: 'Sem descrição',          check: p => !p.descricaoCurta?.trim() && !p.descricaoComplementar?.trim() && !p.nome?.trim() },
-  { id: 'imagem',     label: 'Sem imagem',             check: p => !p.imagemURL },
+  { id: 'imagem',     label: 'Sem imagem',             check: p => !p.imagemURL && !(Array.isArray(p.imagens) && p.imagens.length > 0) },
   { id: 'categoria',  label: 'Categoria não mapeada',  check: (p, m) => !m },
   { id: 'atributos',  label: 'Atributos incompletos',  check: (p, m) => m && (m.atributos||[]).some(a=>!a.valor?.trim()) },
 ]

@@ -106,13 +106,14 @@ export function blingParaMLPayload(produto, categoryId, atributos = [], config =
     catalogListing = false,
   } = config
 
-  // Coleta imagens: imagemURL ou array imagens
+  // Coleta imagens: imagemURL ou array imagens (suporta string e objeto {link, url})
+  const fotosSet = new Set()
   const fotos = []
-  if (produto.imagemURL) fotos.push({ source: produto.imagemURL })
+  const addFoto = url => { if (url && !fotosSet.has(url)) { fotosSet.add(url); fotos.push({ source: url }) } }
+  if (produto.imagemURL) addFoto(produto.imagemURL)
   if (Array.isArray(produto.imagens)) {
     produto.imagens.forEach(img => {
-      const url = img?.link || img?.url || (typeof img === 'string' ? img : null)
-      if (url && !fotos.find(f => f.source === url)) fotos.push({ source: url })
+      addFoto(img?.link || img?.url || img?.linkMiniatura || (typeof img === 'string' ? img : null))
     })
   }
 
