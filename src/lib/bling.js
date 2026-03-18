@@ -65,7 +65,8 @@ export function normalizarProduto(raw) {
   if (!d) return raw
 
   // Imagens: midia.imagens[].link
-  const imagens = d.midia?.imagens?.map(i => i.link || i.url).filter(Boolean) || []
+  const imagensRaw = d.midia?.imagens
+  const imagens = Array.isArray(imagensRaw) ? imagensRaw.map(i => i.link || i.url).filter(Boolean) : []
   const imagemURL = imagens[0] || d.imagemURL || null
 
   // Dimensões
