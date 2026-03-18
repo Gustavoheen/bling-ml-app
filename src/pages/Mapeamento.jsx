@@ -1,9 +1,9 @@
 import { useState, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { getClienteAtivo, getProdutos, getMapeamentos, salvarMapeamentos, getCategoriasProdutos, salvarCategoriasProdutos, atualizarTokensBling } from '../lib/storage'
-import { buscarCategorias, getAtributosCategoria } from '../lib/ml'
-import { buscarOuCriarCategoria, atualizarProduto, refreshToken as blingRefresh, listarCategorias, deletarCategoria } from '../lib/bling'
-import { Search, CheckCircle, Circle, ChevronDown, ChevronUp, GitMerge, ArrowRight, Loader, Zap, RefreshCw, Wand2 } from 'lucide-react'
+import { getClienteAtivo, getProdutos, getMapeamentos, salvarMapeamentos, getCategoriasProdutos, salvarCategoriasProdutos, atualizarTokensBling, atualizarTokensML, adicionarHistorico } from '../lib/storage'
+import { buscarCategorias, getAtributosCategoria, publicarProduto, blingParaMLPayload, refreshToken as mlRefresh } from '../lib/ml'
+import { buscarOuCriarCategoria, atualizarProduto, getProdutoDetalhe, normalizarProduto, refreshToken as blingRefresh, listarCategorias, deletarCategoria } from '../lib/bling'
+import { Search, CheckCircle, Circle, ChevronDown, ChevronUp, GitMerge, ArrowRight, Loader, Zap, RefreshCw, Wand2, Play } from 'lucide-react'
 
 function extrairTipoProduto(nome) {
   const encerrar = new Set([
@@ -54,6 +54,32 @@ function extrairTipoProduto(nome) {
   if (!resultado.length) return null
 
   return resultado.map((w, idx) => (!conectivos.has(w) || idx === 0) ? w.charAt(0).toUpperCase() + w.slice(1) : w).join(' ')
+}
+
+// Consolida nomes similares em categorias fixas para evitar fragmentação
+function normalizarTipo(tipo) {
+  if (!tipo) return 'Outros'
+  const t = tipo.toLowerCase()
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '') // remove acentos para comparação
+  if (t.includes('cadeira'))                                        return 'Cadeiras de Jantar'
+  if (t.includes('sofa') || t.includes('sofa'))                    return 'Sofás'
+  if (t.includes('poltrona'))                                       return 'Poltronas'
+  if (t.includes('mesa') && (t.includes('jantar') || t.includes('sala') || t.includes('escritorio'))) return 'Mesas de Jantar'
+  if (t.includes('mesa') && t.includes('centro'))                  return 'Mesas de Centro'
+  if (t.includes('mesa') && t.includes('lateral'))                 return 'Mesas Laterais'
+  if (t.includes('mesa'))                                          return 'Mesas'
+  if (t.includes('bandeja'))                                        return 'Bandejas'
+  if (t.includes('comoda') || t.includes('comô'))                  return 'Cômodas'
+  if (t.includes('aparador'))                                       return 'Aparadores'
+  if (t.includes('rack') || (t.includes('painel') && t.includes('tv'))) return 'Racks e Painéis TV'
+  if (t.includes('estante'))                                        return 'Estantes'
+  if (t.includes('armario'))                                        return 'Armários'
+  if (t.includes('buffet'))                                         return 'Buffets'
+  if (t.includes('criado') || t.includes('mudo'))                  return 'Criados-Mudo'
+  if (t.includes('escrivaninha') || t.includes('escrivani'))       return 'Escrivaninhas'
+  if (t.includes('banco') || t.includes('banqueta') || t.includes('banquetas')) return 'Bancos e Banquetas'
+  // Se não bateu em nenhuma categoria fixa, usa o tipo extraído normalizado
+  return tipo.charAt(0).toUpperCase() + tipo.slice(1)
 }
 
 function agruparPorCategoria(produtos) {
@@ -316,16 +342,22 @@ export default function Mapeamento() {
   const [reorganizLog, setReorganizLog] = useState([])
   const [previewCategs, setPreviewCategs] = useState(null) // null = não calculado ainda
 
+  // ─── Fluxo Completo (Reorganizar + Publicar teste) ────────────
+  const [fazerTudoAtivo, setFazerTudoAtivo] = useState(false)
+  const [fazerTudoLog, setFazerTudoLog] = useState([])
+  const [testResultML, setTestResultML] = useState(null) // { ok, mlId, prodNome, erro }
+
   // ─── Sincronizar categorias no Bling ─────────────────────────
   const [sincBling, setSincBling] = useState(false)
   const [sincLog, setSincLog] = useState([])
 
   async function calcularPreviewCategs() {
-    // Analisa todos os produtos e agrupa por tipo consolidado
+    // Analisa todos os produtos e agrupa por tipo consolidado (com normalização)
     const todosProdutos = Object.values(grupos).flat()
     const agrupado = {}
     for (const p of todosProdutos) {
-      const tipo = extrairTipoProduto(p.nome) || 'Outros'
+      const tipoRaw = extrairTipoProduto(p.nome) || 'Outros'
+      const tipo = normalizarTipo(tipoRaw)
       if (!agrupado[tipo]) agrupado[tipo] = []
       agrupado[tipo].push(p)
     }
@@ -333,11 +365,12 @@ export default function Mapeamento() {
     const lista = Object.entries(agrupado)
       .sort((a, b) => b[1].length - a[1].length)
       .map(([tipo, prods]) => ({ tipo, qtd: prods.length, prods }))
-    setPreviewCategs(lista)
+    return lista
   }
 
-  async function executarReorganizacao() {
-    if (!previewCategs) return
+  async function executarReorganizacao(listaPreview) {
+    const lista = listaPreview || previewCategs
+    if (!lista) return
     const blingToken = await getBlingToken()
     if (!blingToken) { alert('Bling não conectado.'); return }
 
@@ -352,17 +385,18 @@ export default function Mapeamento() {
         try { await deletarCategoria(blingToken, cat.id) } catch {}
         await new Promise(r => setTimeout(r, 150))
       }
-      setReorganizLog(l => [...l, { status: 'ok', msg: `${categsExistentes.length} categorias deletadas` }])
+      setReorganizLog(l => [...l, { status: 'ok', msg: `${categsExistentes.length} categorias antigas deletadas` }])
     } catch (e) {
       setReorganizLog(l => [...l, { status: 'erro', msg: 'Erro ao deletar: ' + e.message }])
     }
 
     // 2. Cria novas categorias consolidadas com campos ML
     const catProdutos = getCategoriasProdutos(cliente.id)
+    const novoMapa = { ...mapeamentos }
 
-    for (const { tipo, prods } of previewCategs) {
+    for (const { tipo, prods } of lista) {
       if (tipo === 'Outros') continue
-      setReorganizLog(l => [...l, { status: 'buscando', msg: `Criando "${tipo}"...` }])
+      setReorganizLog(l => [...l, { status: 'buscando', msg: `Criando "${tipo}" no Bling + buscando no ML...` }])
       try {
         // Busca categoria no ML
         const res = await buscarCategorias(tipo)
@@ -377,7 +411,7 @@ export default function Mapeamento() {
         // Cria categoria no Bling com campos personalizados ML
         const catId = await buscarOuCriarCategoria(blingToken, tipo, attrs)
 
-        // Salva mapeamento por produto e atualiza produto no Bling com nova categoria
+        // Salva mapeamento por produto
         for (const prod of prods) {
           catProdutos[prod.id] = {
             mlCategoryId: melhor.category_id,
@@ -386,13 +420,20 @@ export default function Mapeamento() {
           }
           // Atualiza produto no Bling com a nova categoria
           if (catId) {
-            try {
-              await atualizarProduto(blingToken, prod.id, { categoria: { id: catId } })
-            } catch {}
-            await new Promise(r => setTimeout(r, 150))
+            try { await atualizarProduto(blingToken, prod.id, { categoria: { id: catId } }) } catch {}
+            await new Promise(r => setTimeout(r, 120))
           }
         }
         salvarCategoriasProdutos(cliente.id, catProdutos)
+
+        // Salva no mapeamento local (para Exportacao reconhecer)
+        novoMapa[tipo] = {
+          categoriaBling: tipo,
+          mlCategoryId: melhor.category_id,
+          mlCategoryName: melhor.domain_name || melhor.category_name,
+          atributos: attrs.map(a => ({ id: a.id, name: a.name, valor: autoFillAtributo(a, prods[0]) })),
+        }
+        salvar(novoMapa)
 
         setReorganizLog(l => l.map((i, idx) => idx === l.length - 1 ? {
           ...i, status: 'ok',
@@ -405,6 +446,92 @@ export default function Mapeamento() {
     }
 
     setReorganizando(false)
+    return catProdutos
+  }
+
+  // ─── Fluxo Completo: Reorganizar → Testar publicação ─────────
+  async function fazerTudoAutomatico() {
+    if (fazerTudoAtivo) return
+    setFazerTudoAtivo(true)
+    setFazerTudoLog([])
+    setTestResultML(null)
+    const log = (msg, tipo = 'info') => setFazerTudoLog(l => [...l, { msg, tipo, ts: new Date().toLocaleTimeString() }])
+
+    try {
+      // PASSO 1: Calcular categorias consolidadas
+      log('Calculando categorias consolidadas...')
+      const lista = await calcularPreviewCategs()
+      setPreviewCategs(lista)
+      log(`${lista.filter(c => c.tipo !== 'Outros').length} categorias detectadas: ${lista.filter(c => c.tipo !== 'Outros').map(c => `${c.tipo} (${c.qtd})`).join(', ')}`, 'ok')
+
+      // PASSO 2: Reorganizar no Bling + mapear ML
+      log('Reorganizando categorias no Bling e mapeando no ML...')
+      const catProdutos = await executarReorganizacao(lista)
+      log('Reorganização concluída!', 'ok')
+
+      // PASSO 3: Encontrar produto mais completo para testar
+      log('Buscando melhor produto para teste de publicação...')
+      const todosProdutos = Object.values(grupos).flat()
+      const candidatos = todosProdutos
+        .filter(p => catProdutos?.[p.id])
+        .sort((a, b) => {
+          const aScore = (a.imagemURL ? 4 : 0) + (a.preco > 0 ? 2 : 0) + ((a.descricaoCurta || a.descricaoComplementar) ? 1 : 0)
+          const bScore = (b.imagemURL ? 4 : 0) + (b.preco > 0 ? 2 : 0) + ((b.descricaoCurta || b.descricaoComplementar) ? 1 : 0)
+          return bScore - aScore
+        })
+
+      if (!candidatos.length) { log('Nenhum produto com categoria mapeada. Execute a sincronização de produtos primeiro.', 'erro'); setFazerTudoAtivo(false); return }
+
+      const prodTeste = candidatos[0]
+      log(`Produto escolhido para teste: "${prodTeste.nome.slice(0, 60)}"`)
+      log(`Categoria ML: ${catProdutos[prodTeste.id].mlCategoryName}`)
+
+      // PASSO 4: Publicar no ML
+      log('Conectando ao Mercado Livre...')
+      if (!cliente?.ml?.accessToken) { log('Mercado Livre não conectado. Conecte na aba Configurações.', 'erro'); setFazerTudoAtivo(false); return }
+
+      let mlToken = cliente.ml.accessToken
+      if (cliente.ml.expiresAt && Date.now() > cliente.ml.expiresAt - 60000 && cliente.ml.refreshToken) {
+        try { const n = await mlRefresh(cliente.ml.refreshToken); atualizarTokensML(cliente.id, n); mlToken = n.accessToken } catch {}
+      }
+
+      // Busca dados completos do Bling
+      const blingToken = await getBlingToken()
+      let prodCompleto = prodTeste
+      if (blingToken) {
+        try {
+          const det = await getProdutoDetalhe(blingToken, prodTeste.id)
+          prodCompleto = normalizarProduto(det)
+          log(`Dados frescos do Bling carregados: ${prodCompleto.imagens?.length || 0} imagens`)
+        } catch (e) { log(`Aviso: usando dados locais (${e.message})`, 'info') }
+      }
+
+      const mapa = catProdutos[prodTeste.id]
+      const payload = blingParaMLPayload(prodCompleto, mapa.mlCategoryId, mapa.atributos || [], { listingType: 'gold_special', condition: 'new', catalogListing: false })
+      log(`Payload montado. Título: "${payload.title.slice(0, 50)}", Preço: R$ ${payload.price}, Imagens: ${payload.pictures?.length || 0}`)
+      log('Publicando no Mercado Livre...')
+
+      try {
+        const resp = await publicarProduto(mlToken, payload)
+        setTestResultML({ ok: true, mlId: resp.id, prodNome: prodTeste.nome })
+        adicionarHistorico(cliente.id, { tipo: 'publicar', produtoId: prodTeste.id, produtoNome: prodTeste.nome, mlId: resp.id, status: 'ok', via: 'ml-auto' })
+        log(`✓ SUCESSO! Produto publicado no ML com ID: ${resp.id}`, 'ok')
+        log(`URL: https://produto.mercadolivre.com.br/MLB-${resp.id?.replace('MLB', '')}`, 'ok')
+      } catch (e) {
+        setTestResultML({ ok: false, prodNome: prodTeste.nome, erro: e.message, payload })
+        log(`✗ Erro ao publicar: ${e.message}`, 'erro')
+        // Analisa o erro e sugere correção
+        if (e.message.includes('picture') || e.message.includes('image')) log('→ Problema com imagens. Verifique se as URLs das fotos são acessíveis publicamente.', 'erro')
+        else if (e.message.includes('price')) log('→ Preço inválido ou abaixo do mínimo permitido pelo ML.', 'erro')
+        else if (e.message.includes('title')) log('→ Título inválido. O ML pode ter restrições específicas para este título.', 'erro')
+        else if (e.message.includes('attribute')) log('→ Atributo obrigatório com valor inválido. Verifique os atributos da categoria.', 'erro')
+        else if (e.message.includes('category')) log('→ Categoria não aceita. Pode ser necessário usar uma subcategoria mais específica.', 'erro')
+      }
+    } catch (e) {
+      log(`Erro fatal: ${e.message}`, 'erro')
+    }
+
+    setFazerTudoAtivo(false)
   }
 
   async function sincronizarCategoriasNoBling() {
@@ -473,22 +600,47 @@ export default function Mapeamento() {
         </div>
       </div>
 
-      {/* CTA automação completa */}
-      {!todasMapeadas && (
-        <div style={{ background: 'linear-gradient(135deg, #1A202C 0%, #2D3748 100%)', borderRadius: 14, padding: '20px 24px', marginBottom: 20, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, flexWrap: 'wrap' }}>
+      {/* ── FAZER TUDO AUTOMATICAMENTE ── */}
+      <div style={{ background: 'linear-gradient(135deg, #2D3748 0%, #553C9A 100%)', borderRadius: 14, padding: '20px 24px', marginBottom: 20 }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, flexWrap: 'wrap', marginBottom: fazerTudoLog.length > 0 ? 16 : 0 }}>
           <div>
-            <p style={{ fontSize: 15, fontWeight: 800, color: '#fff', marginBottom: 4 }}>Automatizar tudo com 1 clique</p>
-            <p style={{ fontSize: 13, color: '#A0AEC0' }}>
-              Mapeia {categoriasBling.length - totalMapeadas} categorias no ML automaticamente. Depois publique na aba Exportação.
+            <p style={{ fontSize: 16, fontWeight: 900, color: '#fff', marginBottom: 4 }}>Fazer Tudo Automaticamente</p>
+            <p style={{ fontSize: 13, color: 'rgba(255,255,255,0.7)' }}>
+              1. Exclui todas as categorias do Bling · 2. Cria categorias consolidadas com campos ML · 3. Publica produto teste no Mercado Livre
             </p>
           </div>
-          <button onClick={autoMapearTudo} disabled={autoMapeando}
-            style={{ display: 'flex', alignItems: 'center', gap: 8, background: '#63B3ED', color: '#1A202C', border: 'none', borderRadius: 10, padding: '12px 24px', fontSize: 14, fontWeight: 800, whiteSpace: 'nowrap', cursor: autoMapeando ? 'default' : 'pointer', opacity: autoMapeando ? 0.7 : 1 }}>
-            {autoMapeando ? <Loader size={15} style={{ animation: 'spin 1s linear infinite' }} /> : <Zap size={15} />}
-            {autoMapeando ? 'Mapeando...' : '⚡ Mapear tudo automaticamente'}
+          <button onClick={fazerTudoAutomatico} disabled={fazerTudoAtivo || reorganizando}
+            style={{ display: 'flex', alignItems: 'center', gap: 8, background: fazerTudoAtivo ? 'rgba(255,255,255,0.3)' : '#F6E05E', color: '#1A202C', border: 'none', borderRadius: 10, padding: '12px 28px', fontSize: 14, fontWeight: 900, whiteSpace: 'nowrap', cursor: fazerTudoAtivo ? 'default' : 'pointer' }}>
+            {fazerTudoAtivo ? <Loader size={15} style={{ animation: 'spin 1s linear infinite' }} /> : <Play size={15} />}
+            {fazerTudoAtivo ? 'Executando...' : '▶ Fazer Tudo'}
           </button>
         </div>
-      )}
+
+        {fazerTudoLog.length > 0 && (
+          <div style={{ background: 'rgba(0,0,0,0.4)', borderRadius: 10, padding: '12px 16px', maxHeight: 260, overflowY: 'auto' }}>
+            {fazerTudoLog.map((l, i) => (
+              <p key={i} style={{ fontSize: 12, fontFamily: 'monospace', color: l.tipo === 'ok' ? '#68D391' : l.tipo === 'erro' ? '#FC8181' : '#E2E8F0', marginBottom: 3, lineHeight: 1.5 }}>
+                <span style={{ color: '#718096' }}>[{l.ts}]</span> {l.msg}
+              </p>
+            ))}
+            {fazerTudoAtivo && <p style={{ fontSize: 11, color: '#63B3ED', fontFamily: 'monospace', animation: 'pulse 1.5s infinite' }}>■ processando...</p>}
+          </div>
+        )}
+
+        {testResultML && (
+          <div style={{ marginTop: 12, padding: '14px 16px', borderRadius: 10, background: testResultML.ok ? 'rgba(72,187,120,0.15)' : 'rgba(252,129,74,0.15)', border: `1px solid ${testResultML.ok ? '#48BB78' : '#FC8181'}` }}>
+            {testResultML.ok
+              ? <p style={{ fontSize: 14, fontWeight: 800, color: '#68D391' }}>✓ Produto publicado com sucesso no ML! ID: {testResultML.mlId}</p>
+              : <>
+                  <p style={{ fontSize: 14, fontWeight: 800, color: '#FC8181', marginBottom: 6 }}>✗ Erro ao publicar: {testResultML.erro}</p>
+                  <button onClick={fazerTudoAutomatico} style={{ background: '#FC8181', color: '#fff', border: 'none', borderRadius: 8, padding: '8px 16px', fontSize: 13, fontWeight: 700, cursor: 'pointer' }}>
+                    Tentar novamente
+                  </button>
+                </>
+            }
+          </div>
+        )}
+      </div>
 
       {/* Progresso geral */}
       <div style={{ background: '#fff', border: '1.5px solid #E2E8F0', borderRadius: 12, padding: '16px 20px', marginBottom: 20 }}>
@@ -549,12 +701,12 @@ export default function Mapeamento() {
             </p>
           </div>
           <div style={{ display: 'flex', gap: 8 }}>
-            <button onClick={calcularPreviewCategs}
+            <button onClick={async () => { const lista = await calcularPreviewCategs(); setPreviewCategs(lista) }}
               style={{ background: '#EDF2F7', color: '#4A5568', border: '1.5px solid #E2E8F0', borderRadius: 8, padding: '8px 14px', fontSize: 13, fontWeight: 700, cursor: 'pointer' }}>
               Ver preview
             </button>
             {previewCategs && (
-              <button onClick={executarReorganizacao} disabled={reorganizando}
+              <button onClick={() => executarReorganizacao()} disabled={reorganizando}
                 style={{ display: 'flex', alignItems: 'center', gap: 7, background: reorganizando ? '#CBD5E0' : '#E53E3E', color: '#fff', border: 'none', borderRadius: 8, padding: '8px 16px', fontSize: 13, fontWeight: 700, cursor: reorganizando ? 'default' : 'pointer' }}>
                 {reorganizando ? <Loader size={13} style={{ animation: 'spin 1s linear infinite' }} /> : null}
                 {reorganizando ? 'Reorganizando...' : '⚡ Executar reorganização'}
