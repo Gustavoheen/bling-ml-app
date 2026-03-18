@@ -469,12 +469,15 @@ export default function Produtos() {
                 <p style={{ color: '#68D391', fontSize: 12, fontFamily: 'monospace', marginBottom: 6 }}>
                   imagens (direto): {JSON.stringify(debugRaw.resposta?.data?.imagens?.slice(0,2) || '(vazio)')}
                 </p>
-                <details>
-                  <summary style={{ color: '#A0AEC0', fontSize: 11, cursor: 'pointer' }}>Ver resposta completa</summary>
-                  <pre style={{ color: '#E2E8F0', fontSize: 10, marginTop: 8, maxHeight: 300, overflow: 'auto', whiteSpace: 'pre-wrap' }}>
-                    {JSON.stringify(debugRaw.resposta?.data, null, 2)}
-                  </pre>
-                </details>
+                <p style={{ color: '#68D391', fontSize: 12, fontFamily: 'monospace', marginBottom: 6 }}>
+                  variacoes[0].imagens: {JSON.stringify(debugRaw.resposta?.data?.variacoes?.[0]?.imagens?.slice(0,2) || '(vazio)')}
+                </p>
+                <p style={{ color: '#A78BFA', fontSize: 12, fontFamily: 'monospace', marginBottom: 6 }}>
+                  Chaves do objeto data: {Object.keys(debugRaw.resposta?.data || {}).join(', ')}
+                </p>
+                <pre style={{ color: '#E2E8F0', fontSize: 10, marginTop: 8, maxHeight: 400, overflow: 'auto', whiteSpace: 'pre-wrap', background: 'rgba(0,0,0,0.3)', padding: 10, borderRadius: 6 }}>
+                  {JSON.stringify(debugRaw.resposta?.data, null, 2)}
+                </pre>
               </>
           }
         </div>
