@@ -100,7 +100,7 @@ export default function Layout() {
         {/* Status conexões */}
         <div style={{ padding: '16px 20px', borderTop: '1px solid rgba(255,255,255,0.08)' }}>
           <p style={{ fontSize: 10, fontWeight: 700, color: '#4A5568', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 8 }}>Conexões</p>
-          <div style={{ display: 'flex', gap: 6 }}>
+          <div style={{ display: 'flex', gap: 6, marginBottom: 10 }}>
             <span style={{
               fontSize: 10, fontWeight: 600, padding: '3px 8px', borderRadius: 20,
               background: cliente?.bling?.accessToken ? 'rgba(72,187,120,0.15)' : 'rgba(252,129,74,0.15)',
@@ -116,6 +116,14 @@ export default function Layout() {
               {cliente?.ml?.accessToken ? '● ML' : '○ ML'}
             </span>
           </div>
+          <button onClick={() => navigate('/auth')}
+            style={{
+              width: '100%', background: 'rgba(99,179,237,0.1)', border: '1px solid rgba(99,179,237,0.3)',
+              borderRadius: 7, padding: '7px 0', fontSize: 12, fontWeight: 700,
+              color: '#63B3ED', cursor: 'pointer',
+            }}>
+            Gerenciar conexões
+          </button>
         </div>
       </aside>
 
