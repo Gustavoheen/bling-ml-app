@@ -72,11 +72,19 @@ export function normalizarProduto(raw) {
   const d = raw?.data || raw
   if (!d || typeof d !== 'object') return raw
 
-  // ── Imagens: todas de midia.imagens[] ──────────────────────────
-  const imagensRaw = d.midia?.imagens
-  const imagens = Array.isArray(imagensRaw)
-    ? imagensRaw.map(i => i.link || i.url || i.linkMiniatura).filter(Boolean)
-    : (d.imagemURL ? [d.imagemURL] : [])
+  // ── Imagens: busca em todas as fontes possíveis ────────────────
+  const extrairUrl = i => i?.link || i?.url || i?.linkMiniatura || (typeof i === 'string' ? i : null)
+  const urlsSet = new Set()
+  const imagens = []
+  const addImg = i => { const u = extrairUrl(i); if (u && !urlsSet.has(u)) { urlsSet.add(u); imagens.push(u) } }
+
+  // 1. midia.imagens[] (resposta fresca do Bling)
+  if (Array.isArray(d.midia?.imagens)) d.midia.imagens.forEach(addImg)
+  // 2. imagens[] já salvas no localStorage (pode ser string ou objeto)
+  if (Array.isArray(d.imagens)) d.imagens.forEach(addImg)
+  // 3. campo direto imagemURL
+  if (d.imagemURL) addImg(d.imagemURL)
+
   const imagemURL = imagens[0] || null
 
   // ── Dimensões ──────────────────────────────────────────────────

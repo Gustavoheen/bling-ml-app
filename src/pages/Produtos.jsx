@@ -1,6 +1,6 @@
 import { useState, useMemo } from 'react'
 import { getClienteAtivo, getProdutos, salvarProdutos, atualizarTokensBling, atualizarTokensML, getMapeamentos, salvarMapeamentos, salvarVinculo, getVinculo, adicionarHistorico, getCategoriasML, getCategoriasProdutos } from '../lib/storage'
-import { getTodosProdutos, atualizarProduto, criarProduto, buscarOuCriarCategoria, refreshToken as blingRefresh } from '../lib/bling'
+import { getTodosProdutos, getProdutoDetalhe, normalizarProduto, atualizarProduto, criarProduto, buscarOuCriarCategoria, refreshToken as blingRefresh } from '../lib/bling'
 import { buscarCategorias, getAtributosCategoria, publicarProduto, atualizarProduto as atualizarProdutoML, blingParaMLPayload, refreshToken as mlRefresh } from '../lib/ml'
 import { RefreshCw, Search, Package, Plus, Edit2, X, Save, AlertCircle, CheckCircle, Loader, Image, Tag, Upload, FileText, Layers } from 'lucide-react'
 
@@ -31,7 +31,7 @@ function validarParaML(produto) {
   if (!produto.nome) erros.push('Nome obrigatório')
   if (!produto.preco || produto.preco <= 0) erros.push('Preço deve ser maior que zero')
   if (!produto.descricaoCurta) erros.push('Descrição obrigatória para ML')
-  if (!produto.imagemURL) erros.push('Imagem obrigatória para ML')
+  if (!produto.imagemURL && !(Array.isArray(produto.imagens) && produto.imagens.length > 0)) erros.push('Imagem obrigatória para ML')
   if (!produto.gtin && !produto.codigo) erros.push('EAN ou SKU recomendado para ML')
   return erros
 }
@@ -130,6 +130,45 @@ export default function Produtos() {
       localStorage.setItem(`bml_ultima_sync_${cliente.id}`, agora)
       setProdutos(lista)
       setUltimaSync(agora)
+    } catch (e) {
+      setErro(e.message)
+    } finally {
+      setSincronizando(false)
+    }
+  }
+
+  // Re-busca detalhes completos dos produtos sem imagem
+  async function corrigirImagens() {
+    if (!cliente) return
+    setErro('')
+    setSincronizando(true)
+    try {
+      const token = await getTokenValido(getClienteAtivo())
+      const atual = getProdutos(cliente.id)
+      const semImagem = atual.filter(p => !p.imagemURL && !(Array.isArray(p.imagens) && p.imagens.length > 0))
+      if (!semImagem.length) { setSincronizando(false); return }
+
+      setProgresso(0)
+      let corrigidos = 0
+      const atualizada = [...atual]
+
+      for (let i = 0; i < semImagem.length; i += 5) {
+        const lote = semImagem.slice(i, i + 5)
+        const resultados = await Promise.allSettled(lote.map(p => getProdutoDetalhe(token, p.id)))
+        resultados.forEach((r, idx) => {
+          if (r.status === 'fulfilled') {
+            const norm = normalizarProduto(r.value)
+            const idxGlobal = atualizada.findIndex(p => p.id === lote[idx].id)
+            if (idxGlobal >= 0) atualizada[idxGlobal] = { ...atualizada[idxGlobal], ...norm }
+            corrigidos++
+          }
+        })
+        setProgresso(corrigidos)
+        await new Promise(r => setTimeout(r, 200))
+      }
+
+      salvarProdutos(cliente.id, atualizada)
+      setProdutos(atualizada)
     } catch (e) {
       setErro(e.message)
     } finally {
@@ -374,6 +413,13 @@ export default function Produtos() {
             style={{ display: 'flex', alignItems: 'center', gap: 7, background: '#fff', border: '1.5px solid #E2E8F0', color: '#1A202C', borderRadius: 8, padding: '9px 16px', fontSize: 13, fontWeight: 700 }}>
             <Plus size={14} /> Novo produto
           </button>
+          {(() => { const semImg = produtos.filter(p => !p.imagemURL && !(Array.isArray(p.imagens) && p.imagens.length > 0)).length; return semImg > 0 ? (
+            <button onClick={corrigirImagens} disabled={sincronizando}
+              style={{ display: 'flex', alignItems: 'center', gap: 7, background: sincronizando ? '#CBD5E0' : '#ED8936', color: '#fff', border: 'none', borderRadius: 8, padding: '9px 16px', fontSize: 13, fontWeight: 700 }}>
+              <Image size={14} />
+              {sincronizando ? `Corrigindo... ${progresso}` : `Corrigir imagens (${semImg})`}
+            </button>
+          ) : null })()}
           <button onClick={sincronizar} disabled={sincronizando}
             style={{ display: 'flex', alignItems: 'center', gap: 8, background: sincronizando ? '#CBD5E0' : '#1A202C', color: '#fff', border: 'none', borderRadius: 8, padding: '9px 18px', fontSize: 13, fontWeight: 700 }}>
             <RefreshCw size={14} style={sincronizando ? { animation: 'spin 1s linear infinite' } : {}} />
