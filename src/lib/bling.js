@@ -59,25 +59,65 @@ async function blingFetch(endpoint, token, options = {}) {
   return data
 }
 
+// Normaliza o produto do Bling v3 para estrutura flat usada no app
+export function normalizarProduto(raw) {
+  const d = raw?.data || raw
+  if (!d) return raw
+
+  // Imagens: midia.imagens[].link
+  const imagens = d.midia?.imagens?.map(i => i.link || i.url).filter(Boolean) || []
+  const imagemURL = imagens[0] || d.imagemURL || null
+
+  // Dimensões
+  const dimensoes = d.dimensoes || {}
+  const largura      = dimensoes.largura      || d.largura      || null
+  const altura       = dimensoes.altura       || d.altura       || null
+  const profundidade = dimensoes.profundidade || d.profundidade || null
+
+  // Peso (pode ser pesoLiquido ou peso)
+  const peso = d.pesoLiquido || d.pesoBruto || d.peso || null
+
+  return {
+    ...d,
+    imagemURL,
+    imagens,
+    largura,
+    altura,
+    profundidade,
+    peso,
+    // Garante campos de texto acessíveis no nível raiz
+    descricaoCurta:        d.descricaoCurta        || '',
+    descricaoComplementar: d.descricaoComplementar || '',
+    gtin:                  d.gtin                  || '',
+    codigo:                d.codigo                || '',
+    nome:                  d.nome                  || '',
+    preco:                 d.preco                 || 0,
+    precoCusto:            d.precoCusto            || 0,
+    variacoes:             d.variacoes             || [],
+    categoria:             d.categoria             || null,
+    estoque:               d.estoque               || { saldoVirtualTotal: 0 },
+  }
+}
+
 export async function getProdutos(token, pagina = 1) {
   return blingFetch(`/produtos?limit=100&pagina=${pagina}&situacao=A`, token)
 }
 
 export async function getTodosProdutos(token, onProgress) {
-  // 1ª passagem: lista básica de todos os IDs
+  // 1ª passagem: lista de resumos
   let pagina = 1
   let resumos = []
   while (true) {
     const data = await getProdutos(token, pagina)
     const itens = data?.data || []
     resumos = [...resumos, ...itens]
-    if (onProgress) onProgress(resumos.length)
+    if (onProgress) onProgress(resumos.length, 'listando')
     if (itens.length < 100) break
     pagina++
     await new Promise(r => setTimeout(r, 300))
   }
 
-  // 2ª passagem: detalhe completo de cada produto (em lotes de 5)
+  // 2ª passagem: detalhe completo em lotes de 5
   const completos = []
   for (let i = 0; i < resumos.length; i += 5) {
     const lote = resumos.slice(i, i + 5)
@@ -86,13 +126,12 @@ export async function getTodosProdutos(token, onProgress) {
     )
     detalhes.forEach((r, idx) => {
       if (r.status === 'fulfilled') {
-        const det = r.value?.data || r.value
-        completos.push({ ...lote[idx], ...det })
+        completos.push(normalizarProduto(r.value))
       } else {
-        completos.push(lote[idx])
+        completos.push(normalizarProduto(lote[idx]))
       }
     })
-    if (onProgress) onProgress(completos.length)
+    if (onProgress) onProgress(completos.length, 'detalhando')
     await new Promise(r => setTimeout(r, 200))
   }
   return completos
