@@ -120,21 +120,45 @@ export async function getProduto(token, itemId) {
 }
 
 // Converter produto Bling para payload ML
-export function blingParaMLPayload(produto, categoryId, atributos = []) {
-  return {
+// config: { listingType, condition, catalogListing }
+export function blingParaMLPayload(produto, categoryId, atributos = [], config = {}) {
+  const {
+    listingType = 'gold_special',
+    condition = 'new',
+    catalogListing = false,
+  } = config
+
+  // Coleta imagens: campo imagemURL ou array imagens
+  const fotos = []
+  if (produto.imagemURL) fotos.push({ source: produto.imagemURL })
+  if (Array.isArray(produto.imagens)) {
+    produto.imagens.forEach(img => {
+      const url = img?.link || img?.url || img
+      if (url && !fotos.find(f => f.source === url)) fotos.push({ source: url })
+    })
+  }
+
+  const payload = {
     title: produto.nome,
     category_id: categoryId,
-    price: produto.preco,
+    price: Number(produto.preco),
     currency_id: 'BRL',
     available_quantity: produto.estoque?.saldoVirtualTotal || 0,
     buying_mode: 'buy_it_now',
-    listing_type_id: 'gold_special',
-    condition: 'new',
+    listing_type_id: listingType,
+    condition,
     description: { plain_text: produto.descricaoCurta || produto.nome },
-    pictures: produto.imagemURL ? [{ source: produto.imagemURL }] : [],
+    pictures: fotos,
     attributes: atributos.map(a => ({
       id: a.id,
       value_name: a.valor || '',
     })).filter(a => a.value_name),
   }
+
+  // Não subir como catálogo
+  if (!catalogListing) {
+    payload.catalog_listing = false
+  }
+
+  return payload
 }
