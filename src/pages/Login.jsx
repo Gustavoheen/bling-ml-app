@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { Zap, Lock } from 'lucide-react'
 
-const SENHA_CORRETA = import.meta.env.VITE_APP_PASSWORD || 'admin123'
+const SENHA_CORRETA = import.meta.env.VITE_APP_PASSWORD || 'bling2025'
 
 export default function Login({ onLogin }) {
   const [senha, setSenha] = useState('')
