@@ -59,44 +59,93 @@ async function blingFetch(endpoint, token, options = {}) {
   return data
 }
 
-// Normaliza o produto do Bling v3 para estrutura flat usada no app
+// Normaliza o produto do Bling v3 — extrai TODOS os campos importantes
 export function normalizarProduto(raw) {
   const d = raw?.data || raw
   if (!d) return raw
 
-  // Imagens: midia.imagens[].link
+  // ── Imagens: todas de midia.imagens[] ──────────────────────────
   const imagensRaw = d.midia?.imagens
-  const imagens = Array.isArray(imagensRaw) ? imagensRaw.map(i => i.link || i.url).filter(Boolean) : []
+  const imagens = Array.isArray(imagensRaw)
+    ? imagensRaw.map(i => i.link || i.url || i.linkMiniatura).filter(Boolean)
+    : []
   const imagemURL = imagens[0] || d.imagemURL || null
 
-  // Dimensões
-  const dimensoes = d.dimensoes || {}
-  const largura      = dimensoes.largura      || d.largura      || null
-  const altura       = dimensoes.altura       || d.altura       || null
-  const profundidade = dimensoes.profundidade || d.profundidade || null
+  // ── Dimensões ──────────────────────────────────────────────────
+  const dimensoes    = d.dimensoes || {}
+  const largura      = dimensoes.largura      ?? d.largura      ?? null
+  const altura       = dimensoes.altura       ?? d.altura       ?? null
+  const profundidade = dimensoes.profundidade ?? d.profundidade ?? null
+  const unidadeMedida = dimensoes.unidadeMedida || 'cm'
 
-  // Peso (pode ser pesoLiquido ou peso)
-  const peso = d.pesoLiquido || d.pesoBruto || d.peso || null
+  // ── Peso ───────────────────────────────────────────────────────
+  const pesoLiquido = d.pesoLiquido ?? d.peso ?? null
+  const pesoBruto   = d.pesoBruto   ?? null
+
+  // ── Fiscal / Tributação ────────────────────────────────────────
+  const trib = d.tributacao || {}
+  const tributacao = {
+    ncm:                    trib.ncm                    || d.ncm                    || '',
+    cest:                   trib.cest                   || d.cest                   || '',
+    origemProduto:          trib.origemProduto          ?? d.origemProduto          ?? '0',
+    percentualIpi:          trib.percentualIpi          ?? d.percentualIpi          ?? 0,
+    codigoEnquadramentoIpi: trib.codigoEnquadramentoIpi || d.codigoEnquadramentoIpi || '',
+    codigoBeneficioFiscal:  trib.codigoBeneficioFiscal  || '',
+    pisConfins:             trib.pisConfins              || '',
+  }
+
+  // ── Características ────────────────────────────────────────────
+  const caracteristicas = Array.isArray(d.caracteristicas) ? d.caracteristicas : []
+
+  // ── Fornecedores ───────────────────────────────────────────────
+  const fornecedores = Array.isArray(d.fornecedores) ? d.fornecedores : []
+
+  // ── Depósitos / Estoque por local ──────────────────────────────
+  const depositos = Array.isArray(d.depositos) ? d.depositos : []
+
+  // ── Variações ──────────────────────────────────────────────────
+  const variacoes = Array.isArray(d.variacoes) ? d.variacoes : []
 
   return {
     ...d,
+    // Básico
+    id:                    d.id,
+    nome:                  d.nome                  || '',
+    codigo:                d.codigo                || '',
+    preco:                 d.preco                 || 0,
+    precoCusto:            d.precoCusto            || 0,
+    situacao:              d.situacao              || 'A',
+    tipo:                  d.tipo                  || 'P',
+    unidade:               d.unidade               || '',
+    marca:                 d.marca                 || '',
+    observacoes:           d.observacoes           || '',
+    gtin:                  d.gtin                  || '',
+    // Descrições
+    descricaoCurta:        d.descricaoCurta        || '',
+    descricaoComplementar: d.descricaoComplementar || '',
+    // Imagens
     imagemURL,
     imagens,
+    // Dimensões
     largura,
     altura,
     profundidade,
-    peso,
-    // Garante campos de texto acessíveis no nível raiz
-    descricaoCurta:        d.descricaoCurta        || '',
-    descricaoComplementar: d.descricaoComplementar || '',
-    gtin:                  d.gtin                  || '',
-    codigo:                d.codigo                || '',
-    nome:                  d.nome                  || '',
-    preco:                 d.preco                 || 0,
-    precoCusto:            d.precoCusto            || 0,
-    variacoes:             d.variacoes             || [],
-    categoria:             d.categoria             || null,
-    estoque:               d.estoque               || { saldoVirtualTotal: 0 },
+    unidadeMedida,
+    // Peso
+    peso: pesoLiquido,
+    pesoLiquido,
+    pesoBruto,
+    // Categoria
+    categoria:  d.categoria  || null,
+    // Estoque
+    estoque:    d.estoque    || { saldoVirtualTotal: 0 },
+    // Fiscal
+    tributacao,
+    // Complexos
+    caracteristicas,
+    fornecedores,
+    depositos,
+    variacoes,
   }
 }
 

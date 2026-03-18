@@ -1,8 +1,8 @@
 import { useState, useMemo } from 'react'
-import { getClienteAtivo, getProdutos, salvarProdutos, atualizarTokensBling, atualizarTokensML, getMapeamentos, salvarMapeamentos, salvarVinculo, getVinculo, adicionarHistorico } from '../lib/storage'
+import { getClienteAtivo, getProdutos, salvarProdutos, atualizarTokensBling, atualizarTokensML, getMapeamentos, salvarMapeamentos, salvarVinculo, getVinculo, adicionarHistorico, getCategoriasML } from '../lib/storage'
 import { getTodosProdutos, atualizarProduto, criarProduto, buscarOuCriarCategoria, refreshToken as blingRefresh } from '../lib/bling'
 import { buscarCategorias, getAtributosCategoria, publicarProduto, atualizarProduto as atualizarProdutoML, blingParaMLPayload, refreshToken as mlRefresh } from '../lib/ml'
-import { RefreshCw, Search, Package, Plus, Edit2, X, Save, AlertCircle, CheckCircle, Loader, Upload } from 'lucide-react'
+import { RefreshCw, Search, Package, Plus, Edit2, X, Save, AlertCircle, CheckCircle, Loader, Image, Tag, Truck, FileText, Layers } from 'lucide-react'
 
 async function getTokenValido(cliente) {
   if (!cliente?.bling?.accessToken) throw new Error('Bling não conectado.')
@@ -15,17 +15,15 @@ async function getTokenValido(cliente) {
   return cliente.bling.accessToken
 }
 
-const CAMPOS = [
-  { key: 'nome',          label: 'Nome',         type: 'text',   required: true },
-  { key: 'codigo',        label: 'SKU / Código',  type: 'text' },
-  { key: 'preco',         label: 'Preço (R$)',    type: 'number', required: true },
-  { key: 'precoCusto',    label: 'Custo (R$)',    type: 'number' },
-  { key: 'descricaoCurta',label: 'Descrição',     type: 'textarea' },
-  { key: 'peso',          label: 'Peso (kg)',     type: 'number' },
-  { key: 'altura',        label: 'Altura (cm)',   type: 'number' },
-  { key: 'largura',       label: 'Largura (cm)',  type: 'number' },
-  { key: 'profundidade',  label: 'Profundidade',  type: 'number' },
-  { key: 'gtin',          label: 'EAN / GTIN',    type: 'text' },
+const ORIGENS = [
+  { v: '0', l: '0 – Nacional' }, { v: '1', l: '1 – Estrangeira (importação direta)' },
+  { v: '2', l: '2 – Estrangeira (adquirida no mercado interno)' },
+  { v: '3', l: '3 – Nacional c/ +40% de conteúdo estrangeiro' },
+  { v: '4', l: '4 – Nacional (processos básicos)' },
+  { v: '5', l: '5 – Nacional c/ ≤40% de conteúdo estrangeiro' },
+  { v: '6', l: '6 – Estrangeira (importação direta, sem similar)' },
+  { v: '7', l: '7 – Estrangeira (mercado interno, sem similar)' },
+  { v: '8', l: '8 – Nacional, mercadoria ou bem com conteúdo de Importação superior a 70%' },
 ]
 
 function validarParaML(produto) {
@@ -50,6 +48,7 @@ export default function Produtos() {
   // Modal edição/criação
   const [modal, setModal] = useState(null)
   const [form, setForm] = useState({})
+  const [abaModal, setAbaModal] = useState('basico')
   const [salvando, setSalvando] = useState(false)
   const [erroModal, setErroModal] = useState('')
   const [sucessoModal, setSucessoModal] = useState(false)
@@ -112,27 +111,64 @@ export default function Produtos() {
   }
 
   function abrirEditar(produto) {
+    setAbaModal('basico')
     setForm({
       nome: produto.nome || '',
       codigo: produto.codigo || '',
       preco: produto.preco || '',
       precoCusto: produto.precoCusto || '',
+      marca: produto.marca || '',
+      unidade: produto.unidade || '',
       descricaoCurta: produto.descricaoCurta || '',
-      peso: produto.peso || '',
+      descricaoComplementar: produto.descricaoComplementar || '',
+      observacoes: produto.observacoes || '',
+      peso: produto.pesoLiquido || produto.peso || '',
+      pesoBruto: produto.pesoBruto || '',
       altura: produto.altura || '',
       largura: produto.largura || '',
       profundidade: produto.profundidade || '',
       gtin: produto.gtin || '',
+      ncm: produto.tributacao?.ncm || '',
+      cest: produto.tributacao?.cest || '',
+      origemProduto: produto.tributacao?.origemProduto || '0',
+      percentualIpi: produto.tributacao?.percentualIpi || '',
+      codigoEnquadramentoIpi: produto.tributacao?.codigoEnquadramentoIpi || '',
     })
     setModal({ produto, isNovo: false })
     setErroModal('')
     setSucessoModal(false)
-    // Pré-carrega mapeamento existente da categoria do produto
+
+    // 1. Tenta mapeamento salvo pela categoria do produto
     const cat = produto.categoria?.nome || 'Sem categoria'
     const mapArr = getMapeamentos(cliente?.id || '')
     const mapObj = {}
     for (const i of (Array.isArray(mapArr) ? mapArr : [])) mapObj[i.categoriaBling] = i
-    const mapaAtual = mapObj[cat]
+    let mapaAtual = mapObj[cat]
+
+    // 2. Se não encontrou, tenta auto-detectar pelo nome/categoria do produto
+    //    usando as categorias ML validadas cadastradas pelo usuário
+    if (!mapaAtual?.mlCategoryId) {
+      const categoriasML = getCategoriasML(cliente?.id || '')
+      const nomeProduto  = (produto.nome || '').toLowerCase()
+      const nomeCategoria = (produto.categoria?.nome || '').toLowerCase()
+      const match = categoriasML.find(c => {
+        const nomeML = (c.mlNome || '').toLowerCase()
+        return nomeCategoria.includes(nomeML) || nomeML.includes(nomeCategoria) ||
+               nomeProduto.includes(nomeML)   || nomeML.split(' ').some(p => p.length > 3 && nomeProduto.includes(p))
+      })
+      if (match?.mlId) {
+        // Salva automaticamente no mapeamento
+        mapObj[cat] = {
+          categoriaBling: cat,
+          mlCategoryId: match.mlId,
+          mlCategoryName: match.mlNome,
+          atributos: (match.atributos || []),
+        }
+        salvarMapeamentos(cliente.id, Object.values(mapObj))
+        mapaAtual = mapObj[cat]
+      }
+    }
+
     if (mapaAtual?.mlCategoryId) {
       setCategMLSelecionada({ category_id: mapaAtual.mlCategoryId, domain_name: mapaAtual.mlCategoryName })
       setBuscaCategML(mapaAtual.mlCategoryName)
@@ -148,7 +184,8 @@ export default function Produtos() {
   }
 
   function abrirNovo() {
-    setForm({ nome: '', codigo: '', preco: '', descricaoCurta: '', peso: '', gtin: '' })
+    setAbaModal('basico')
+    setForm({ nome: '', codigo: '', preco: '', descricaoCurta: '', descricaoComplementar: '', peso: '', gtin: '', marca: '', origemProduto: '0', ncm: '', cest: '' })
     setModal({ produto: null, isNovo: true })
     setErroModal('')
     setSucessoModal(false)
@@ -191,12 +228,26 @@ export default function Produtos() {
         codigo: form.codigo || undefined,
         preco: parseFloat(form.preco) || 0,
         precoCusto: parseFloat(form.precoCusto) || undefined,
+        marca: form.marca || undefined,
+        unidade: form.unidade || undefined,
         descricaoCurta: form.descricaoCurta || undefined,
-        peso: parseFloat(form.peso) || undefined,
-        altura: parseFloat(form.altura) || undefined,
-        largura: parseFloat(form.largura) || undefined,
-        profundidade: parseFloat(form.profundidade) || undefined,
+        descricaoComplementar: form.descricaoComplementar || undefined,
+        observacoes: form.observacoes || undefined,
+        pesoLiquido: parseFloat(form.peso) || undefined,
+        pesoBruto: parseFloat(form.pesoBruto) || undefined,
         gtin: form.gtin || undefined,
+        dimensoes: {
+          largura: parseFloat(form.largura) || undefined,
+          altura: parseFloat(form.altura) || undefined,
+          profundidade: parseFloat(form.profundidade) || undefined,
+        },
+        tributacao: {
+          ncm: form.ncm || undefined,
+          cest: form.cest || undefined,
+          origemProduto: form.origemProduto || '0',
+          percentualIpi: parseFloat(form.percentualIpi) || undefined,
+          codigoEnquadramentoIpi: form.codigoEnquadramentoIpi || undefined,
+        },
         ...(categoriaId ? { categoria: { id: categoriaId } } : {}),
       }
 
@@ -389,7 +440,7 @@ export default function Produtos() {
       {/* Modal edição/criação */}
       {modal && (
         <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}>
-          <div style={{ background: '#fff', borderRadius: 16, width: '100%', maxWidth: 580, maxHeight: '90vh', overflow: 'auto', boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }}>
+          <div style={{ background: '#fff', borderRadius: 16, width: '100%', maxWidth: 700, maxHeight: '92vh', overflow: 'auto', boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }}>
             {/* Header modal */}
             <div style={{ padding: '20px 24px', borderBottom: '1.5px solid #E2E8F0', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
               <h3 style={{ fontSize: 16, fontWeight: 800, color: '#1A202C' }}>
@@ -400,29 +451,214 @@ export default function Produtos() {
               </button>
             </div>
 
-            <div style={{ padding: '20px 24px' }}>
-              {/* Campos */}
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, marginBottom: 16 }}>
-                {CAMPOS.map(c => (
-                  <div key={c.key} style={{ gridColumn: c.type === 'textarea' ? '1 / -1' : 'auto' }}>
-                    <label style={{ fontSize: 12, fontWeight: 700, color: '#4A5568', display: 'block', marginBottom: 4 }}>
-                      {c.label} {c.required && <span style={{ color: '#FC8181' }}>*</span>}
-                    </label>
-                    {c.type === 'textarea'
-                      ? <textarea value={form[c.key] || ''} onChange={e => setForm(f => ({ ...f, [c.key]: e.target.value }))}
-                          rows={3} style={{ width: '100%', padding: '8px 10px', border: '1.5px solid #E2E8F0', borderRadius: 6, fontSize: 13, outline: 'none', resize: 'vertical', boxSizing: 'border-box' }} />
-                      : <input type={c.type} value={form[c.key] || ''} onChange={e => setForm(f => ({ ...f, [c.key]: e.target.value }))}
-                          style={{ width: '100%', padding: '8px 10px', border: '1.5px solid #E2E8F0', borderRadius: 6, fontSize: 13, outline: 'none', boxSizing: 'border-box' }} />
-                    }
-                  </div>
-                ))}
-              </div>
+            {/* Abas */}
+            <div style={{ display: 'flex', borderBottom: '1.5px solid #E2E8F0', background: '#F7FAFC' }}>
+              {[
+                { id: 'basico',    icon: Package,  label: 'Básico'    },
+                { id: 'descricao', icon: FileText,  label: 'Descrição' },
+                { id: 'fiscal',    icon: Tag,       label: 'Fiscal'    },
+                { id: 'imagens',   icon: Image,     label: `Imagens${modal.produto?.imagens?.length ? ` (${modal.produto.imagens.length})` : ''}` },
+                { id: 'detalhes',  icon: Layers,    label: 'Detalhes'  },
+                { id: 'ml',        icon: Upload,    label: 'ML'        },
+              ].map(({ id, icon: Icon, label }) => (
+                <button key={id} onClick={() => setAbaModal(id)}
+                  style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '10px 14px', border: 'none', borderBottom: abaModal === id ? '2px solid #3182CE' : '2px solid transparent', background: 'none', fontSize: 12, fontWeight: abaModal === id ? 700 : 500, color: abaModal === id ? '#3182CE' : '#718096', cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                  <Icon size={13} />{label}
+                </button>
+              ))}
+            </div>
 
-              {/* Categoria ML — cadastro novo e edição */}
-              {(modal.isNovo || !modal.isNovo) && (
-                <div style={{ gridColumn: '1 / -1', borderTop: '1.5px solid #F7FAFC', paddingTop: 16, marginTop: 4 }}>
+            <div style={{ padding: '20px 24px' }}>
+
+              {/* ── ABA BÁSICO ── */}
+              {abaModal === 'basico' && (
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+                  {[
+                    { key: 'nome',       label: 'Nome',          type: 'text',   req: true, full: true },
+                    { key: 'codigo',     label: 'SKU / Código',  type: 'text' },
+                    { key: 'gtin',       label: 'EAN / GTIN',    type: 'text' },
+                    { key: 'marca',      label: 'Marca',         type: 'text' },
+                    { key: 'unidade',    label: 'Unidade',       type: 'text' },
+                    { key: 'preco',      label: 'Preço (R$)',    type: 'number', req: true },
+                    { key: 'precoCusto', label: 'Custo (R$)',    type: 'number' },
+                    { key: 'peso',       label: 'Peso liq. (kg)',type: 'number' },
+                    { key: 'pesoBruto',  label: 'Peso bruto (kg)',type:'number' },
+                    { key: 'largura',    label: 'Largura (cm)',  type: 'number' },
+                    { key: 'altura',     label: 'Altura (cm)',   type: 'number' },
+                    { key: 'profundidade', label: 'Profundidade (cm)', type: 'number' },
+                  ].map(c => (
+                    <div key={c.key} style={{ gridColumn: c.full ? '1 / -1' : 'auto' }}>
+                      <label style={LABEL}>{c.label} {c.req && <span style={{ color: '#FC8181' }}>*</span>}</label>
+                      <input type={c.type} value={form[c.key] ?? ''} onChange={e => setForm(f => ({ ...f, [c.key]: e.target.value }))}
+                        style={INPUT} />
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* ── ABA DESCRIÇÃO ── */}
+              {abaModal === 'descricao' && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+                  <div>
+                    <label style={LABEL}>Descrição curta (usada no ML) <span style={{ color: '#FC8181' }}>*</span></label>
+                    <textarea value={form.descricaoCurta || ''} onChange={e => setForm(f => ({ ...f, descricaoCurta: e.target.value }))}
+                      rows={4} style={{ ...INPUT, resize: 'vertical' }} placeholder="Descrição que aparece no anúncio do ML..." />
+                  </div>
+                  <div>
+                    <label style={LABEL}>Descrição complementar / completa</label>
+                    <textarea value={form.descricaoComplementar || ''} onChange={e => setForm(f => ({ ...f, descricaoComplementar: e.target.value }))}
+                      rows={6} style={{ ...INPUT, resize: 'vertical' }} placeholder="Descrição técnica completa..." />
+                  </div>
+                  <div>
+                    <label style={LABEL}>Observações internas</label>
+                    <textarea value={form.observacoes || ''} onChange={e => setForm(f => ({ ...f, observacoes: e.target.value }))}
+                      rows={3} style={{ ...INPUT, resize: 'vertical' }} placeholder="Notas internas..." />
+                  </div>
+                </div>
+              )}
+
+              {/* ── ABA FISCAL ── */}
+              {abaModal === 'fiscal' && (
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+                  {[
+                    { key: 'ncm',                    label: 'NCM',             type: 'text', full: false },
+                    { key: 'cest',                   label: 'CEST',            type: 'text' },
+                    { key: 'percentualIpi',          label: 'IPI (%)',         type: 'number' },
+                    { key: 'codigoEnquadramentoIpi', label: 'Enquadramento IPI', type: 'text' },
+                  ].map(c => (
+                    <div key={c.key} style={{ gridColumn: c.full ? '1 / -1' : 'auto' }}>
+                      <label style={LABEL}>{c.label}</label>
+                      <input type={c.type} value={form[c.key] ?? ''} onChange={e => setForm(f => ({ ...f, [c.key]: e.target.value }))}
+                        style={INPUT} />
+                    </div>
+                  ))}
+                  <div style={{ gridColumn: '1 / -1' }}>
+                    <label style={LABEL}>Origem do produto</label>
+                    <select value={form.origemProduto ?? '0'} onChange={e => setForm(f => ({ ...f, origemProduto: e.target.value }))}
+                      style={{ ...INPUT, appearance: 'auto' }}>
+                      {ORIGENS.map(o => <option key={o.v} value={o.v}>{o.l}</option>)}
+                    </select>
+                  </div>
+                </div>
+              )}
+
+              {/* ── ABA IMAGENS ── */}
+              {abaModal === 'imagens' && (
+                <div>
+                  {(!modal.produto?.imagens || modal.produto.imagens.length === 0) ? (
+                    <div style={{ textAlign: 'center', padding: '32px 0', color: '#A0AEC0' }}>
+                      <Image size={36} style={{ marginBottom: 12 }} />
+                      <p style={{ fontWeight: 700 }}>Nenhuma imagem cadastrada</p>
+                      <p style={{ fontSize: 12, marginTop: 4 }}>Adicione imagens no Bling e sincronize novamente</p>
+                    </div>
+                  ) : (
+                    <div>
+                      <p style={{ fontSize: 12, color: '#718096', marginBottom: 12 }}>{modal.produto.imagens.length} imagem(ns) cadastrada(s)</p>
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(120px, 1fr))', gap: 10 }}>
+                        {modal.produto.imagens.map((url, i) => (
+                          <div key={i} style={{ border: '1.5px solid #E2E8F0', borderRadius: 8, overflow: 'hidden', aspectRatio: '1', background: '#F7FAFC' }}>
+                            <img src={url} alt={`Imagem ${i+1}`}
+                              style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                              onError={e => { e.currentTarget.style.display = 'none' }} />
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* ── ABA DETALHES ── */}
+              {abaModal === 'detalhes' && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+                  {/* Características */}
+                  <div>
+                    <p style={SECTION_TITLE}>Características</p>
+                    {(!modal.produto?.caracteristicas || modal.produto.caracteristicas.length === 0) ? (
+                      <p style={{ fontSize: 13, color: '#A0AEC0' }}>Nenhuma característica cadastrada no Bling</p>
+                    ) : (
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                        {modal.produto.caracteristicas.map((c, i) => (
+                          <span key={i} style={{ fontSize: 12, background: '#F7FAFC', border: '1px solid #E2E8F0', borderRadius: 6, padding: '4px 10px', color: '#4A5568' }}>
+                            {c.descricao || c.nome || JSON.stringify(c)}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Fornecedores */}
+                  <div>
+                    <p style={SECTION_TITLE}>Fornecedores</p>
+                    {(!modal.produto?.fornecedores || modal.produto.fornecedores.length === 0) ? (
+                      <p style={{ fontSize: 13, color: '#A0AEC0' }}>Nenhum fornecedor cadastrado</p>
+                    ) : (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                        {modal.produto.fornecedores.map((f, i) => (
+                          <div key={i} style={{ background: '#F7FAFC', border: '1px solid #E2E8F0', borderRadius: 8, padding: '10px 14px' }}>
+                            <p style={{ fontSize: 13, fontWeight: 700, color: '#1A202C' }}>{f.fornecedor?.nome || f.nome || `Fornecedor ${i+1}`}</p>
+                            <div style={{ display: 'flex', gap: 16, marginTop: 4, flexWrap: 'wrap' }}>
+                              {f.codigo && <span style={{ fontSize: 11, color: '#718096' }}>Cód: {f.codigo}</span>}
+                              {f.preco > 0 && <span style={{ fontSize: 11, color: '#718096' }}>Preço: R$ {Number(f.preco).toFixed(2)}</span>}
+                              {f.prazoEntrega > 0 && <span style={{ fontSize: 11, color: '#718096' }}>Prazo: {f.prazoEntrega}d</span>}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Depósitos */}
+                  {modal.produto?.depositos?.length > 0 && (
+                    <div>
+                      <p style={SECTION_TITLE}>Estoque por depósito</p>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                        {modal.produto.depositos.map((d, i) => (
+                          <div key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: '7px 12px', background: '#F7FAFC', borderRadius: 7, fontSize: 13 }}>
+                            <span style={{ color: '#4A5568' }}>{d.deposito?.nome || `Depósito ${i+1}`}</span>
+                            <span style={{ fontWeight: 700, color: d.saldoVirtual > 0 ? '#48BB78' : '#FC8181' }}>{d.saldoVirtual ?? d.saldo ?? 0}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Variações */}
+                  {modal.produto?.variacoes?.length > 0 && (
+                    <div>
+                      <p style={SECTION_TITLE}>Variações ({modal.produto.variacoes.length})</p>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                        {modal.produto.variacoes.map((v, i) => (
+                          <div key={i} style={{ padding: '7px 12px', background: '#F7FAFC', borderRadius: 7, fontSize: 12, color: '#4A5568' }}>
+                            {v.nome || v.descricao || `Variação ${i+1}`}
+                            {v.preco > 0 && <span style={{ marginLeft: 8, fontWeight: 700, color: '#1A202C' }}>R$ {Number(v.preco).toFixed(2)}</span>}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* ── ABA ML ── */}
+              {abaModal === 'ml' && (
+                <div>
+                  {/* Validação */}
+                  {errosML.length > 0 ? (
+                    <div style={{ background: 'rgba(252,193,7,0.08)', border: '1px solid rgba(252,193,7,0.4)', borderRadius: 10, padding: '12px 14px', marginBottom: 16 }}>
+                      <p style={{ fontSize: 12, fontWeight: 700, color: '#D69E2E', marginBottom: 6 }}>⚠ Campos faltando para exportar ao ML:</p>
+                      {errosML.map(e => <p key={e} style={{ fontSize: 12, color: '#B7791F', marginTop: 2 }}>• {e}</p>)}
+                    </div>
+                  ) : (
+                    <div style={{ background: 'rgba(72,187,120,0.08)', border: '1px solid rgba(72,187,120,0.3)', borderRadius: 10, padding: '10px 14px', marginBottom: 16, display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <CheckCircle size={14} color="#48BB78" />
+                      <span style={{ fontSize: 12, fontWeight: 700, color: '#48BB78' }}>Produto pronto para exportar ao Mercado Livre</span>
+                    </div>
+                  )}
+
+                  {/* Categoria ML */}
                   <p style={{ fontSize: 12, fontWeight: 700, color: '#3182CE', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 10 }}>
-                    Categoria no Mercado Livre (opcional — vincula já na criação)
+                    Categoria no Mercado Livre
                   </p>
                   <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
                     <input type="text" placeholder="Buscar categoria ML..." value={buscaCategML}
@@ -430,7 +666,7 @@ export default function Produtos() {
                       onKeyDown={e => e.key === 'Enter' && buscarCategML(buscaCategML)}
                       style={{ flex: 1, padding: '8px 12px', border: '1.5px solid #E2E8F0', borderRadius: 6, fontSize: 13, outline: 'none' }} />
                     <button type="button" onClick={() => buscarCategML(buscaCategML)} disabled={buscandoCateg}
-                      style={{ background: '#3182CE', color: '#fff', border: 'none', borderRadius: 6, padding: '8px 14px', fontSize: 13, fontWeight: 700, display: 'flex', alignItems: 'center', gap: 6 }}>
+                      style={{ background: '#3182CE', color: '#fff', border: 'none', borderRadius: 6, padding: '8px 14px', fontSize: 13, fontWeight: 700, display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
                       {buscandoCateg ? <Loader size={13} style={{ animation: 'spin 1s linear infinite' }} /> : <Search size={13} />}
                     </button>
                   </div>
@@ -438,7 +674,7 @@ export default function Produtos() {
                     <div style={{ border: '1.5px solid #E2E8F0', borderRadius: 8, overflow: 'hidden', marginBottom: 10 }}>
                       {resultsCatML.map(r => (
                         <button key={r.category_id} type="button" onClick={() => selecionarCategML(r)}
-                          style={{ width: '100%', padding: '9px 14px', background: '#F7FAFC', border: 'none', borderBottom: '1px solid #E2E8F0', textAlign: 'left', fontSize: 13 }}
+                          style={{ width: '100%', padding: '9px 14px', background: '#F7FAFC', border: 'none', borderBottom: '1px solid #E2E8F0', textAlign: 'left', fontSize: 13, cursor: 'pointer' }}
                           onMouseEnter={e => e.currentTarget.style.background = 'rgba(99,179,237,0.08)'}
                           onMouseLeave={e => e.currentTarget.style.background = '#F7FAFC'}>
                           <span style={{ fontWeight: 700, color: '#1A202C' }}>{r.domain_name}</span>
@@ -450,21 +686,20 @@ export default function Produtos() {
                   {categMLSelecionada && (
                     <div style={{ background: 'rgba(72,187,120,0.06)', border: '1px solid rgba(72,187,120,0.2)', borderRadius: 8, padding: '10px 14px', marginBottom: atributosML.length ? 12 : 0 }}>
                       <p style={{ fontSize: 11, fontWeight: 700, color: '#48BB78' }}>✓ Categoria selecionada</p>
-                      <p style={{ fontSize: 13, fontWeight: 700, color: '#1A202C', marginTop: 2 }}>{categMLSelecionada.domain_name}</p>
+                      <p style={{ fontSize: 13, fontWeight: 700, color: '#1A202C', marginTop: 2 }}>{categMLSelecionada.domain_name || buscaCategML}</p>
                       <p style={{ fontSize: 11, color: '#718096', fontFamily: 'monospace' }}>{categMLSelecionada.category_id}</p>
                     </div>
                   )}
                   {atributosML.length > 0 && (
                     <div style={{ marginTop: 12 }}>
-                      <p style={{ fontSize: 12, fontWeight: 700, color: '#4A5568', marginBottom: 8 }}>Atributos obrigatórios desta categoria:</p>
+                      <p style={{ fontSize: 12, fontWeight: 700, color: '#4A5568', marginBottom: 8 }}>Atributos obrigatórios:</p>
                       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
                         {atributosML.map(a => (
                           <div key={a.id}>
-                            <label style={{ fontSize: 11, fontWeight: 600, color: '#4A5568', display: 'block', marginBottom: 3 }}>{a.name} *</label>
+                            <label style={LABEL}>{a.name} *</label>
                             <input type="text" value={valoresAtributos[a.id] || ''}
                               onChange={e => setValoresAtributos(v => ({ ...v, [a.id]: e.target.value }))}
-                              placeholder={a.name}
-                              style={{ width: '100%', padding: '7px 10px', border: '1.5px solid #E2E8F0', borderRadius: 6, fontSize: 12, outline: 'none', boxSizing: 'border-box' }} />
+                              placeholder={a.name} style={INPUT} />
                           </div>
                         ))}
                       </div>
@@ -473,35 +708,22 @@ export default function Produtos() {
                 </div>
               )}
 
-              {/* Validação ML */}
-              {!modal.isNovo && errosML.length > 0 && (
-                <div style={{ background: 'rgba(252,193,7,0.08)', border: '1px solid rgba(252,193,7,0.4)', borderRadius: 10, padding: '12px 14px', marginBottom: 16 }}>
-                  <p style={{ fontSize: 12, fontWeight: 700, color: '#D69E2E', marginBottom: 6 }}>⚠ Campos faltando para exportar ao ML:</p>
-                  {errosML.map(e => <p key={e} style={{ fontSize: 12, color: '#B7791F', marginTop: 2 }}>• {e}</p>)}
-                </div>
-              )}
-              {!modal.isNovo && errosML.length === 0 && (
-                <div style={{ background: 'rgba(72,187,120,0.08)', border: '1px solid rgba(72,187,120,0.3)', borderRadius: 10, padding: '10px 14px', marginBottom: 16, display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <CheckCircle size={14} color="#48BB78" />
-                  <span style={{ fontSize: 12, fontWeight: 700, color: '#48BB78' }}>Produto pronto para exportar ao Mercado Livre</span>
-                </div>
-              )}
-
+              {/* Erros / Sucesso */}
               {erroModal && (
-                <div style={{ background: 'rgba(252,129,74,0.1)', border: '1px solid #FC8181', borderRadius: 8, padding: '10px 14px', marginBottom: 12, fontSize: 13, color: '#C53030', fontWeight: 600 }}>
+                <div style={{ background: 'rgba(252,129,74,0.1)', border: '1px solid #FC8181', borderRadius: 8, padding: '10px 14px', marginTop: 14, fontSize: 13, color: '#C53030', fontWeight: 600 }}>
                   {erroModal}
                 </div>
               )}
               {sucessoModal && (
-                <div style={{ background: 'rgba(72,187,120,0.1)', border: '1px solid #48BB78', borderRadius: 8, padding: '10px 14px', marginBottom: 12, display: 'flex', alignItems: 'center', gap: 8 }}>
+                <div style={{ background: 'rgba(72,187,120,0.1)', border: '1px solid #48BB78', borderRadius: 8, padding: '10px 14px', marginTop: 14, display: 'flex', alignItems: 'center', gap: 8 }}>
                   <CheckCircle size={14} color="#48BB78" />
-                  <span style={{ fontSize: 13, fontWeight: 700, color: '#48BB78' }}>Salvo no Bling!</span>
+                  <span style={{ fontSize: 13, fontWeight: 700, color: '#48BB78' }}>Salvo com sucesso!</span>
                 </div>
               )}
 
-              <div style={{ display: 'flex', gap: 10 }}>
+              <div style={{ display: 'flex', gap: 10, marginTop: 18 }}>
                 <button onClick={salvar} disabled={salvando}
-                  style={{ flex: 1, background: salvando ? '#CBD5E0' : '#1A202C', color: '#fff', border: 'none', borderRadius: 8, padding: '12px 0', fontSize: 14, fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
+                  style={{ flex: 1, background: salvando ? '#CBD5E0' : '#1A202C', color: '#fff', border: 'none', borderRadius: 8, padding: '12px 0', fontSize: 14, fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, cursor: salvando ? 'default' : 'pointer' }}>
                   <Save size={14} />
                   {salvando
                     ? etapaSalvo === 'bling' ? '1/3 Salvando no Bling...'
@@ -513,7 +735,7 @@ export default function Produtos() {
                   }
                 </button>
                 <button onClick={() => setModal(null)}
-                  style={{ background: '#F7FAFC', border: '1.5px solid #E2E8F0', color: '#718096', borderRadius: 8, padding: '12px 20px', fontSize: 14, fontWeight: 600 }}>
+                  style={{ background: '#F7FAFC', border: '1.5px solid #E2E8F0', color: '#718096', borderRadius: 8, padding: '12px 20px', fontSize: 14, fontWeight: 600, cursor: 'pointer' }}>
                   Cancelar
                 </button>
               </div>
@@ -532,3 +754,7 @@ const TH = {
   fontSize: 11, fontWeight: 700, color: '#718096',
   textTransform: 'uppercase', letterSpacing: '0.06em',
 }
+
+const LABEL = { fontSize: 12, fontWeight: 700, color: '#4A5568', display: 'block', marginBottom: 4 }
+const INPUT  = { width: '100%', padding: '8px 10px', border: '1.5px solid #E2E8F0', borderRadius: 6, fontSize: 13, outline: 'none', boxSizing: 'border-box' }
+const SECTION_TITLE = { fontSize: 12, fontWeight: 800, color: '#4A5568', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 10 }
