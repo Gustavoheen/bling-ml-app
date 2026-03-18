@@ -145,8 +145,15 @@ export default function Produtos() {
       const semImg = produtos.find(p => !p.imagemURL && !(Array.isArray(p.imagens) && p.imagens.length > 0))
       const alvo = semImg || produtos[0]
       if (!alvo) return
-      const resp = await getProdutoDetalhe(token, alvo.id)
-      setDebugRaw({ id: alvo.id, nome: alvo.nome, resposta: resp })
+      // Chama o proxy diretamente para ver resposta crua
+      const res = await fetch('/api/bling-proxy', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ endpoint: `/produtos/${alvo.id}`, method: 'GET', accessToken: token }),
+      })
+      const resp = await res.json()
+      console.log('=== BLING RAW RESPONSE ===', JSON.stringify(resp, null, 2))
+      setDebugRaw({ id: alvo.id, nome: alvo.nome, resposta: resp, status: res.status })
     } catch (e) {
       setDebugRaw({ erro: e.message })
     }
@@ -460,23 +467,15 @@ export default function Produtos() {
           {debugRaw.erro
             ? <p style={{ color: '#FC8181', fontFamily: 'monospace', fontSize: 12 }}>Erro: {debugRaw.erro}</p>
             : <>
-                <p style={{ color: '#68D391', fontSize: 12, fontFamily: 'monospace', marginBottom: 6 }}>
-                  imagemURL: {debugRaw.resposta?.data?.imagemURL || '(vazio)'}
+                <p style={{ color: '#A78BFA', fontSize: 12, fontFamily: 'monospace', marginBottom: 8 }}>
+                  HTTP Status: {debugRaw.status} | Chaves: {Object.keys(debugRaw.resposta || {}).join(', ')}
                 </p>
-                <p style={{ color: '#68D391', fontSize: 12, fontFamily: 'monospace', marginBottom: 6 }}>
-                  midia.imagens: {JSON.stringify(debugRaw.resposta?.data?.midia?.imagens?.slice(0,2) || '(vazio)')}
+                <p style={{ color: '#A78BFA', fontSize: 12, fontFamily: 'monospace', marginBottom: 8 }}>
+                  Chaves de data: {Object.keys(debugRaw.resposta?.data || {}).join(', ') || '(data vazio ou ausente)'}
                 </p>
-                <p style={{ color: '#68D391', fontSize: 12, fontFamily: 'monospace', marginBottom: 6 }}>
-                  imagens (direto): {JSON.stringify(debugRaw.resposta?.data?.imagens?.slice(0,2) || '(vazio)')}
-                </p>
-                <p style={{ color: '#68D391', fontSize: 12, fontFamily: 'monospace', marginBottom: 6 }}>
-                  variacoes[0].imagens: {JSON.stringify(debugRaw.resposta?.data?.variacoes?.[0]?.imagens?.slice(0,2) || '(vazio)')}
-                </p>
-                <p style={{ color: '#A78BFA', fontSize: 12, fontFamily: 'monospace', marginBottom: 6 }}>
-                  Chaves do objeto data: {Object.keys(debugRaw.resposta?.data || {}).join(', ')}
-                </p>
-                <pre style={{ color: '#E2E8F0', fontSize: 10, marginTop: 8, maxHeight: 400, overflow: 'auto', whiteSpace: 'pre-wrap', background: 'rgba(0,0,0,0.3)', padding: 10, borderRadius: 6 }}>
-                  {JSON.stringify(debugRaw.resposta?.data, null, 2)}
+                <p style={{ fontSize: 11, color: '#68D391', marginBottom: 6 }}>⬇ Resposta completa do Bling (também no console F12):</p>
+                <pre style={{ color: '#E2E8F0', fontSize: 10, maxHeight: 500, overflow: 'auto', whiteSpace: 'pre-wrap', background: 'rgba(0,0,0,0.4)', padding: 10, borderRadius: 6 }}>
+                  {JSON.stringify(debugRaw.resposta, null, 2)}
                 </pre>
               </>
           }
