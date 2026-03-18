@@ -126,6 +126,24 @@ export default function Produtos() {
     setModal({ produto, isNovo: false })
     setErroModal('')
     setSucessoModal(false)
+    // Pré-carrega mapeamento existente da categoria do produto
+    const cat = produto.categoria?.nome || 'Sem categoria'
+    const mapArr = getMapeamentos(cliente?.id || '')
+    const mapObj = {}
+    for (const i of (Array.isArray(mapArr) ? mapArr : [])) mapObj[i.categoriaBling] = i
+    const mapaAtual = mapObj[cat]
+    if (mapaAtual?.mlCategoryId) {
+      setCategMLSelecionada({ category_id: mapaAtual.mlCategoryId, domain_name: mapaAtual.mlCategoryName })
+      setBuscaCategML(mapaAtual.mlCategoryName)
+      setAtributosML(mapaAtual.atributos?.map(a => ({ id: a.id, name: a.name })) || [])
+      setValoresAtributos(Object.fromEntries((mapaAtual.atributos || []).map(a => [a.id, a.valor || ''])))
+    } else {
+      setBuscaCategML('')
+      setResultsCatML([])
+      setCategMLSelecionada(null)
+      setAtributosML([])
+      setValoresAtributos({})
+    }
   }
 
   function abrirNovo() {
@@ -166,13 +184,13 @@ export default function Produtos() {
       }
 
       // Salva mapeamento ML se categoria foi selecionada
-      if (modal.isNovo && categMLSelecionada && form.categoria) {
+      const catNomeEdit = modal.isNovo ? form.categoria : (modal.produto?.categoria?.nome || 'Sem categoria')
+      if (categMLSelecionada && catNomeEdit) {
         const mapArr = getMapeamentos(cliente.id)
         const mapObj = {}
         for (const i of (Array.isArray(mapArr) ? mapArr : [])) mapObj[i.categoriaBling] = i
-        const catNome = form.categoria
-        mapObj[catNome] = {
-          categoriaBling: catNome,
+        mapObj[catNomeEdit] = {
+          categoriaBling: catNomeEdit,
           mlCategoryId: categMLSelecionada.category_id,
           mlCategoryName: categMLSelecionada.domain_name || categMLSelecionada.category_name,
           atributos: atributosML.map(a => ({ id: a.id, name: a.name, valor: valoresAtributos[a.id] || '' })),
@@ -343,8 +361,8 @@ export default function Produtos() {
                 ))}
               </div>
 
-              {/* Categoria ML — só no cadastro novo */}
-              {modal.isNovo && (
+              {/* Categoria ML — cadastro novo e edição */}
+              {(modal.isNovo || !modal.isNovo) && (
                 <div style={{ gridColumn: '1 / -1', borderTop: '1.5px solid #F7FAFC', paddingTop: 16, marginTop: 4 }}>
                   <p style={{ fontSize: 12, fontWeight: 700, color: '#3182CE', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 10 }}>
                     Categoria no Mercado Livre (opcional — vincula já na criação)
