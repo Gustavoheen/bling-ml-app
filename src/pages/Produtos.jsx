@@ -1,7 +1,8 @@
 import { useState, useMemo } from 'react'
-import { getClienteAtivo, getProdutos, salvarProdutos, atualizarTokensBling } from '../lib/storage'
+import { getClienteAtivo, getProdutos, salvarProdutos, atualizarTokensBling, getMapeamentos, salvarMapeamentos } from '../lib/storage'
 import { getTodosProdutos, atualizarProduto, criarProduto, refreshToken as blingRefresh } from '../lib/bling'
-import { RefreshCw, Search, Package, Plus, Edit2, X, Save, AlertCircle, CheckCircle, ExternalLink } from 'lucide-react'
+import { buscarCategorias, getAtributosCategoria } from '../lib/ml'
+import { RefreshCw, Search, Package, Plus, Edit2, X, Save, AlertCircle, CheckCircle, Loader } from 'lucide-react'
 
 async function getTokenValido(cliente) {
   if (!cliente?.bling?.accessToken) throw new Error('Bling não conectado.')
@@ -47,11 +48,37 @@ export default function Produtos() {
   const [ultimaSync, setUltimaSync] = useState(() => localStorage.getItem(`bml_ultima_sync_${cliente?.id}`) || null)
 
   // Modal edição/criação
-  const [modal, setModal] = useState(null) // null | { produto, isNovo }
+  const [modal, setModal] = useState(null)
   const [form, setForm] = useState({})
   const [salvando, setSalvando] = useState(false)
   const [erroModal, setErroModal] = useState('')
   const [sucessoModal, setSucessoModal] = useState(false)
+
+  // Seletor de categoria ML no modal
+  const [buscaCategML, setBuscaCategML] = useState('')
+  const [resultsCatML, setResultsCatML] = useState([])
+  const [buscandoCateg, setBuscandoCateg] = useState(false)
+  const [categMLSelecionada, setCategMLSelecionada] = useState(null)
+  const [atributosML, setAtributosML] = useState([])
+  const [valoresAtributos, setValoresAtributos] = useState({})
+
+  async function buscarCategML(query) {
+    if (!query.trim()) return
+    setBuscandoCateg(true)
+    try { setResultsCatML(await buscarCategorias(query)) }
+    catch { setResultsCatML([]) }
+    finally { setBuscandoCateg(false) }
+  }
+
+  async function selecionarCategML(cat) {
+    setCategMLSelecionada(cat)
+    setResultsCatML([])
+    setBuscaCategML(cat.domain_name || cat.category_name)
+    try {
+      const attrs = await getAtributosCategoria(cat.category_id)
+      setAtributosML(attrs)
+    } catch { setAtributosML([]) }
+  }
 
   const produtosFiltrados = useMemo(() => {
     if (!busca.trim()) return produtos
@@ -106,6 +133,11 @@ export default function Produtos() {
     setModal({ produto: null, isNovo: true })
     setErroModal('')
     setSucessoModal(false)
+    setBuscaCategML('')
+    setResultsCatML([])
+    setCategMLSelecionada(null)
+    setAtributosML([])
+    setValoresAtributos({})
   }
 
   async function salvar() {
@@ -133,8 +165,22 @@ export default function Produtos() {
         await atualizarProduto(token, modal.produto.id, dados)
       }
 
+      // Salva mapeamento ML se categoria foi selecionada
+      if (modal.isNovo && categMLSelecionada && form.categoria) {
+        const mapArr = getMapeamentos(cliente.id)
+        const mapObj = {}
+        for (const i of (Array.isArray(mapArr) ? mapArr : [])) mapObj[i.categoriaBling] = i
+        const catNome = form.categoria
+        mapObj[catNome] = {
+          categoriaBling: catNome,
+          mlCategoryId: categMLSelecionada.category_id,
+          mlCategoryName: categMLSelecionada.domain_name || categMLSelecionada.category_name,
+          atributos: atributosML.map(a => ({ id: a.id, name: a.name, valor: valoresAtributos[a.id] || '' })),
+        }
+        salvarMapeamentos(cliente.id, Object.values(mapObj))
+      }
+
       setSucessoModal(true)
-      // Atualiza lista local
       await sincronizar()
       setTimeout(() => { setModal(null); setSucessoModal(false) }, 1200)
     } catch (e) {
@@ -296,6 +342,61 @@ export default function Produtos() {
                   </div>
                 ))}
               </div>
+
+              {/* Categoria ML — só no cadastro novo */}
+              {modal.isNovo && (
+                <div style={{ gridColumn: '1 / -1', borderTop: '1.5px solid #F7FAFC', paddingTop: 16, marginTop: 4 }}>
+                  <p style={{ fontSize: 12, fontWeight: 700, color: '#3182CE', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 10 }}>
+                    Categoria no Mercado Livre (opcional — vincula já na criação)
+                  </p>
+                  <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
+                    <input type="text" placeholder="Buscar categoria ML..." value={buscaCategML}
+                      onChange={e => setBuscaCategML(e.target.value)}
+                      onKeyDown={e => e.key === 'Enter' && buscarCategML(buscaCategML)}
+                      style={{ flex: 1, padding: '8px 12px', border: '1.5px solid #E2E8F0', borderRadius: 6, fontSize: 13, outline: 'none' }} />
+                    <button type="button" onClick={() => buscarCategML(buscaCategML)} disabled={buscandoCateg}
+                      style={{ background: '#3182CE', color: '#fff', border: 'none', borderRadius: 6, padding: '8px 14px', fontSize: 13, fontWeight: 700, display: 'flex', alignItems: 'center', gap: 6 }}>
+                      {buscandoCateg ? <Loader size={13} style={{ animation: 'spin 1s linear infinite' }} /> : <Search size={13} />}
+                    </button>
+                  </div>
+                  {resultsCatML.length > 0 && (
+                    <div style={{ border: '1.5px solid #E2E8F0', borderRadius: 8, overflow: 'hidden', marginBottom: 10 }}>
+                      {resultsCatML.map(r => (
+                        <button key={r.category_id} type="button" onClick={() => selecionarCategML(r)}
+                          style={{ width: '100%', padding: '9px 14px', background: '#F7FAFC', border: 'none', borderBottom: '1px solid #E2E8F0', textAlign: 'left', fontSize: 13 }}
+                          onMouseEnter={e => e.currentTarget.style.background = 'rgba(99,179,237,0.08)'}
+                          onMouseLeave={e => e.currentTarget.style.background = '#F7FAFC'}>
+                          <span style={{ fontWeight: 700, color: '#1A202C' }}>{r.domain_name}</span>
+                          <span style={{ color: '#A0AEC0', marginLeft: 8, fontSize: 11 }}>{r.category_id}</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                  {categMLSelecionada && (
+                    <div style={{ background: 'rgba(72,187,120,0.06)', border: '1px solid rgba(72,187,120,0.2)', borderRadius: 8, padding: '10px 14px', marginBottom: atributosML.length ? 12 : 0 }}>
+                      <p style={{ fontSize: 11, fontWeight: 700, color: '#48BB78' }}>✓ Categoria selecionada</p>
+                      <p style={{ fontSize: 13, fontWeight: 700, color: '#1A202C', marginTop: 2 }}>{categMLSelecionada.domain_name}</p>
+                      <p style={{ fontSize: 11, color: '#718096', fontFamily: 'monospace' }}>{categMLSelecionada.category_id}</p>
+                    </div>
+                  )}
+                  {atributosML.length > 0 && (
+                    <div style={{ marginTop: 12 }}>
+                      <p style={{ fontSize: 12, fontWeight: 700, color: '#4A5568', marginBottom: 8 }}>Atributos obrigatórios desta categoria:</p>
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+                        {atributosML.map(a => (
+                          <div key={a.id}>
+                            <label style={{ fontSize: 11, fontWeight: 600, color: '#4A5568', display: 'block', marginBottom: 3 }}>{a.name} *</label>
+                            <input type="text" value={valoresAtributos[a.id] || ''}
+                              onChange={e => setValoresAtributos(v => ({ ...v, [a.id]: e.target.value }))}
+                              placeholder={a.name}
+                              style={{ width: '100%', padding: '7px 10px', border: '1.5px solid #E2E8F0', borderRadius: 6, fontSize: 12, outline: 'none', boxSizing: 'border-box' }} />
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
 
               {/* Validação ML */}
               {!modal.isNovo && errosML.length > 0 && (
