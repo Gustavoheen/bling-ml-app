@@ -137,6 +137,21 @@ export default function Produtos() {
     }
   }
 
+  // Diagnóstico: mostra resposta bruta do Bling para um produto
+  const [debugRaw, setDebugRaw] = useState(null)
+  async function debugProduto() {
+    try {
+      const token = await getTokenValido(getClienteAtivo())
+      const semImg = produtos.find(p => !p.imagemURL && !(Array.isArray(p.imagens) && p.imagens.length > 0))
+      const alvo = semImg || produtos[0]
+      if (!alvo) return
+      const resp = await getProdutoDetalhe(token, alvo.id)
+      setDebugRaw({ id: alvo.id, nome: alvo.nome, resposta: resp })
+    } catch (e) {
+      setDebugRaw({ erro: e.message })
+    }
+  }
+
   // Re-busca detalhes completos dos produtos sem imagem
   async function corrigirImagens() {
     if (!cliente) return
@@ -433,6 +448,42 @@ export default function Produtos() {
           <AlertCircle size={16} color="#FC8181" />
           <span style={{ fontSize: 13, color: '#C53030', fontWeight: 600 }}>{erro}</span>
         </div>
+      )}
+
+      {/* Debug: diagnóstico de imagens */}
+      {debugRaw && (
+        <div style={{ background: '#1A202C', borderRadius: 12, padding: 16, marginBottom: 16 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+            <span style={{ fontSize: 12, fontWeight: 800, color: '#63B3ED' }}>DIAGNÓSTICO — {debugRaw.nome}</span>
+            <button onClick={() => setDebugRaw(null)} style={{ background: 'none', border: 'none', color: '#718096', cursor: 'pointer', fontSize: 16 }}>✕</button>
+          </div>
+          {debugRaw.erro
+            ? <p style={{ color: '#FC8181', fontFamily: 'monospace', fontSize: 12 }}>Erro: {debugRaw.erro}</p>
+            : <>
+                <p style={{ color: '#68D391', fontSize: 12, fontFamily: 'monospace', marginBottom: 6 }}>
+                  imagemURL: {debugRaw.resposta?.data?.imagemURL || '(vazio)'}
+                </p>
+                <p style={{ color: '#68D391', fontSize: 12, fontFamily: 'monospace', marginBottom: 6 }}>
+                  midia.imagens: {JSON.stringify(debugRaw.resposta?.data?.midia?.imagens?.slice(0,2) || '(vazio)')}
+                </p>
+                <p style={{ color: '#68D391', fontSize: 12, fontFamily: 'monospace', marginBottom: 6 }}>
+                  imagens (direto): {JSON.stringify(debugRaw.resposta?.data?.imagens?.slice(0,2) || '(vazio)')}
+                </p>
+                <details>
+                  <summary style={{ color: '#A0AEC0', fontSize: 11, cursor: 'pointer' }}>Ver resposta completa</summary>
+                  <pre style={{ color: '#E2E8F0', fontSize: 10, marginTop: 8, maxHeight: 300, overflow: 'auto', whiteSpace: 'pre-wrap' }}>
+                    {JSON.stringify(debugRaw.resposta?.data, null, 2)}
+                  </pre>
+                </details>
+              </>
+          }
+        </div>
+      )}
+      {produtos.length > 0 && !debugRaw && (
+        <button onClick={debugProduto}
+          style={{ fontSize: 11, color: '#A0AEC0', background: 'none', border: '1px dashed #CBD5E0', borderRadius: 6, padding: '4px 10px', marginBottom: 12, cursor: 'pointer' }}>
+          🔍 Diagnóstico de imagens
+        </button>
       )}
 
       {/* Stats */}

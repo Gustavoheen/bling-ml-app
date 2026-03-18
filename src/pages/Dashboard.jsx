@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useCallback } from 'react'
+import { useState, useMemo, useCallback } from 'react'
 import { getClienteAtivo } from '../lib/storage'
 import { refreshToken as blingRefresh, getTodosPedidos } from '../lib/bling'
 import { atualizarTokensBling } from '../lib/storage'
@@ -39,7 +39,8 @@ function categorizarSituacao(situacao) {
   return 'Pendente'
 }
 
-function calcularMetricas(pedidos) {
+function calcularMetricas(pedidosRaw) {
+  const pedidos = Array.isArray(pedidosRaw) ? pedidosRaw : []
   let receita = 0
   let custo = 0
   const statusCount = { Pendente: 0, Processando: 0, Enviado: 0, Entregue: 0, Cancelado: 0, Devolvido: 0 }
