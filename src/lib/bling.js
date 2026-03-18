@@ -16,22 +16,16 @@ export function getAuthUrl() {
   return `${AUTH_URL}?${params.toString()}`
 }
 
-export async function trocarCodigoPorToken(code) {
-  const credentials = btoa(`${CLIENT_ID}:${CLIENT_SECRET}`)
-  const res = await fetch(TOKEN_URL, {
+async function blingOAuth(body) {
+  const res = await fetch('/api/bling-token', {
     method: 'POST',
-    headers: {
-      'Authorization': `Basic ${credentials}`,
-      'Content-Type': 'application/x-www-form-urlencoded',
-      'Accept': 'application/json',
-    },
-    body: new URLSearchParams({
-      grant_type: 'authorization_code',
-      code,
-      redirect_uri: REDIRECT_URI,
-    }),
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
   })
-  if (!res.ok) throw new Error(`Bling token error: ${res.status}`)
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error(err?.error?.description || err?.message || `Bling token error: ${res.status}`)
+  }
   const data = await res.json()
   return {
     accessToken: data.access_token,
@@ -40,27 +34,12 @@ export async function trocarCodigoPorToken(code) {
   }
 }
 
+export async function trocarCodigoPorToken(code) {
+  return blingOAuth({ grant_type: 'authorization_code', code })
+}
+
 export async function refreshToken(refreshTk) {
-  const credentials = btoa(`${CLIENT_ID}:${CLIENT_SECRET}`)
-  const res = await fetch(TOKEN_URL, {
-    method: 'POST',
-    headers: {
-      'Authorization': `Basic ${credentials}`,
-      'Content-Type': 'application/x-www-form-urlencoded',
-      'Accept': 'application/json',
-    },
-    body: new URLSearchParams({
-      grant_type: 'refresh_token',
-      refresh_token: refreshTk,
-    }),
-  })
-  if (!res.ok) throw new Error(`Bling refresh error: ${res.status}`)
-  const data = await res.json()
-  return {
-    accessToken: data.access_token,
-    refreshToken: data.refresh_token,
-    expiresAt: Date.now() + (data.expires_in * 1000),
-  }
+  return blingOAuth({ grant_type: 'refresh_token', refresh_token: refreshTk })
 }
 
 async function blingFetch(endpoint, token, options = {}) {
