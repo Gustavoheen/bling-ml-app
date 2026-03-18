@@ -91,6 +91,47 @@ export default function Mapeamento() {
     salvar(novo)
   }
 
+  const [autoMapeando, setAutoMapeando] = useState(false)
+  const [autoLog, setAutoLog] = useState([])
+
+  async function autoMapearTudo() {
+    setAutoMapeando(true)
+    setAutoLog([])
+    const novoMapa = { ...mapeamentos }
+
+    for (const cat of categoriasBling) {
+      if (novoMapa[cat]?.mlCategoryId) {
+        setAutoLog(l => [...l, { cat, status: 'pulado', msg: 'Já mapeada' }])
+        continue
+      }
+      setAutoLog(l => [...l, { cat, status: 'buscando', msg: 'Buscando...' }])
+      try {
+        const resultados = await buscarCategorias(cat)
+        if (!resultados || resultados.length === 0) {
+          setAutoLog(l => l.map(i => i.cat === cat ? { ...i, status: 'erro', msg: 'Nenhuma categoria encontrada' } : i))
+          continue
+        }
+        const melhor = resultados[0]
+        let attrs = []
+        try { attrs = await getAtributosCategoria(melhor.category_id) } catch {}
+
+        novoMapa[cat] = {
+          categoriaBling: cat,
+          mlCategoryId: melhor.category_id,
+          mlCategoryName: melhor.domain_name || melhor.category_name,
+          atributos: attrs.map(a => ({ id: a.id, name: a.name, valor: '' })),
+        }
+        setAutoLog(l => l.map(i => i.cat === cat ? { ...i, status: 'ok', msg: `→ ${melhor.domain_name || melhor.category_name}` } : i))
+      } catch {
+        setAutoLog(l => l.map(i => i.cat === cat ? { ...i, status: 'erro', msg: 'Erro na busca' } : i))
+      }
+      await new Promise(r => setTimeout(r, 300))
+    }
+
+    salvar(novoMapa)
+    setAutoMapeando(false)
+  }
+
   if (produtos.length === 0) {
     return (
       <div>
@@ -113,12 +154,19 @@ export default function Mapeamento() {
             {totalMapeadas} de {categoriasBling.length} categorias mapeadas · {totalProdutos} produtos prontos
           </p>
         </div>
-        {totalMapeadas > 0 && (
-          <button onClick={() => navigate('/app/exportacao')}
-            style={{ display: 'flex', alignItems: 'center', gap: 8, background: '#1A202C', color: '#fff', border: 'none', borderRadius: 8, padding: '10px 20px', fontSize: 13, fontWeight: 700 }}>
-            Publicar {totalProdutos} produtos <ArrowRight size={14} />
+        <div style={{ display: 'flex', gap: 10 }}>
+          <button onClick={autoMapearTudo} disabled={autoMapeando}
+            style={{ display: 'flex', alignItems: 'center', gap: 8, background: autoMapeando ? '#CBD5E0' : '#3182CE', color: '#fff', border: 'none', borderRadius: 8, padding: '10px 18px', fontSize: 13, fontWeight: 700 }}>
+            {autoMapeando ? <Loader size={14} style={{ animation: 'spin 1s linear infinite' }} /> : '⚡'}
+            {autoMapeando ? 'Mapeando...' : 'Auto-mapear tudo'}
           </button>
-        )}
+          {totalMapeadas > 0 && (
+            <button onClick={() => navigate('/app/exportacao')}
+              style={{ display: 'flex', alignItems: 'center', gap: 8, background: '#1A202C', color: '#fff', border: 'none', borderRadius: 8, padding: '10px 18px', fontSize: 13, fontWeight: 700 }}>
+              Publicar {totalProdutos} <ArrowRight size={14} />
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Progresso geral */}
@@ -133,6 +181,24 @@ export default function Mapeamento() {
           <div style={{ height: '100%', width: `${(totalMapeadas / categoriasBling.length) * 100}%`, background: '#48BB78', borderRadius: 99, transition: 'width 0.3s' }} />
         </div>
       </div>
+
+      {/* Log do auto-mapeamento */}
+      {autoLog.length > 0 && (
+        <div style={{ background: '#1A202C', borderRadius: 12, padding: '16px 20px', marginBottom: 20, maxHeight: 200, overflow: 'auto' }}>
+          <p style={{ fontSize: 12, fontWeight: 700, color: '#63B3ED', marginBottom: 10, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+            {autoMapeando ? '⚡ Auto-mapeando...' : '✓ Concluído'}
+          </p>
+          {autoLog.map((l, i) => (
+            <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '3px 0' }}>
+              <span style={{ fontSize: 12, color: l.status === 'ok' ? '#48BB78' : l.status === 'erro' ? '#FC8181' : l.status === 'pulado' ? '#718096' : '#63B3ED', flexShrink: 0 }}>
+                {l.status === 'ok' ? '✓' : l.status === 'erro' ? '✗' : l.status === 'pulado' ? '–' : '…'}
+              </span>
+              <span style={{ fontSize: 12, color: '#E2E8F0', fontWeight: 600 }}>{l.cat}</span>
+              <span style={{ fontSize: 12, color: '#718096' }}>{l.msg}</span>
+            </div>
+          ))}
+        </div>
+      )}
 
       {/* Lista de categorias */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
