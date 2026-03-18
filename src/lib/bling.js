@@ -43,6 +43,18 @@ export async function refreshToken(refreshTk) {
 }
 
 async function blingFetch(endpoint, token, options = {}) {
+  // Usa proxy para métodos de escrita para evitar CORS
+  const method = options.method || 'GET'
+  if (method !== 'GET') {
+    const res = await fetch('/api/bling-proxy', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ endpoint, method, body: options.body ? JSON.parse(options.body) : undefined, accessToken: token }),
+    })
+    const data = await res.json()
+    if (!res.ok) throw new Error(data?.error?.description || data?.error || `Erro ${res.status}`)
+    return data
+  }
   const res = await fetch(`${BASE_URL}${endpoint}`, {
     ...options,
     headers: {
@@ -88,4 +100,18 @@ export async function getCategorias(token) {
 
 export async function getContatos(token, pagina = 1) {
   return blingFetch(`/contatos?limit=100&pagina=${pagina}`, token)
+}
+
+export async function atualizarProduto(token, id, dados) {
+  return blingFetch(`/produtos/${id}`, token, {
+    method: 'PUT',
+    body: JSON.stringify(dados),
+  })
+}
+
+export async function criarProduto(token, dados) {
+  return blingFetch('/produtos', token, {
+    method: 'POST',
+    body: JSON.stringify(dados),
+  })
 }
