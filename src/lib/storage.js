@@ -127,6 +127,10 @@ export function getVinculo(clienteId, blingId) {
   return getVinculos(clienteId)[blingId] || null
 }
 
+export function limparVinculos(clienteId) {
+  localStorage.removeItem(`bml_vinculos_${clienteId}`)
+}
+
 // Categorias ML salvas pelo usuário (para criar no Bling)
 export function getCategoriasML(clienteId) {
   try { return JSON.parse(localStorage.getItem(`bml_categorias_ml_${clienteId}`) || '[]') }
